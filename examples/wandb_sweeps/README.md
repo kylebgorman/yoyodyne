@@ -1,19 +1,20 @@
-# W&B Sweeps
+# Weights & Biases sweeps
 
-Example scripts for making a W&B sweep, training agents in the sweep space, and downloading the results. Read about W&B sweeps [here](https://docs.wandb.ai/guides/sweeps).
+This directory contains example scripts for running a [Weights & Biases](https://wandb.ai/site) [hyperparameter sweep](https://docs.wandb.ai/guides/sweeps) and downloading the results.
 
-- The example in [make_wandb_sweep.py](make_wandb_sweep.py) is just one possible hyparparameter grid. You should edit that file directly to build a hyperparameter grid for your problem.
-- Consider also that you can run a bayes search instead of the default random search. See [here](https://docs.wandb.ai/guides/sweeps/define-sweep-configuration#configuration-keys)
-- When running [train_wandb_sweep_agent.py](train_wandb_sweep_agent.py) you need the `project_name` and `sweep_id` from an existing sweep. Then, it can be called with the same arguments as `yoyodyne-train` where any hyperparameters in the sweep config will override command-line hyperparameter args.
+* [make_wandb_sweep.py](make_wandb_sweep.py) creates the sweep itself and defines the hyperparameter grid.
+  - The grid used here is just one of many possible grids; feel free to edit the grid as you see fit for your problem.
+  - The sweep here uses `"random"` search. You may wish instead to try [Bayesian search](https://wandb.ai/site/articles/bayesian-hyperparameter-optimization-a-primer) by specifying `"bayes"` as the search method.
+* The [train_wandb_sweep_agent.py](train_wandb_sweep_agent.py) script requires
+  the `project_name` and `sweep_id` from an existing sweep. It can be called with the same arguments as `yoyodyne-train`; hyperparameters specified in the sweep configuration override those specified on the command line.
 
-## Usage
+## Sample usage
 
 ```
-# Creates a wandb sweep
-python examples/wandb_sweeps/make_wandb_sweep.py --sweep_name foo
-# Runs an agent to train on hyperparameters sampled from the sweep
-# Defaults to a single run.
-python train_wandb_sweep_agent.py --sweep_id bar --experiment baz ...
-# Pulls results from the sweep from the wandb API
-python get_wandb_results.py --project_name entity/baz --output_filepath output.tsv
+# Creates a wandb sweep.
+./make_wandb_sweep.py --project mri --sweep foo
+# Runs the sweep; defaults to a single run.
+./train_wandb_sweep_agent.py --sweep_id bar --experiment baz ...
+# Pulls sweep results from the wandb API and writes them to a TSV file.
+python get_wandb_results.py --project_name entity/baz --output output.tsv
 ```
