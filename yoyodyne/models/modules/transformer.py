@@ -161,9 +161,11 @@ class TransformerModule(base.BaseModule):
             embedded (torch.Tensor): embedded tensor of shape
                 B x seq_len x embed_dim.
         """
-        word_embedding = self.esq * self.embeddings(symbols)
-        positional_embedding = self.positional_encoding(symbols)
-        return self.dropout_layer(word_embedding + positional_embedding)
+        word_embedded = self.esq * self.embeddings(symbols)
+        positional_embedded = self.positional_encoding(symbols)
+        embedded = word_embedded + positional_embedding
+        self.dropout_layer(embedded)
+        return embedded
 
 
 class TransformerEncoder(TransformerModule):
@@ -175,8 +177,9 @@ class TransformerEncoder(TransformerModule):
 
     After:
         Xiong, R., Yang, Y., He, D., Zheng, K., Zheng, S., Xing, C., ..., and
-        Liu, T.-Y. 2020. In Proceedings of the 37th International Conference
-        on Machine Learning, pages 10524-10533.
+        Liu, T. 2020. On layer normalization in the transformer architecture.
+        In Proceedings of the 37th International Conference on Machine
+        Learning, pages 10524-10533.
     """
 
     def forward(self, source: data.PaddedTensor) -> torch.Tensor:
@@ -188,8 +191,8 @@ class TransformerEncoder(TransformerModule):
         Returns:
             torch.Tensor: sequence of encoded symbols.
         """
-        embedding = self.embed(source.padded)
-        output = self.module(embedding, src_key_padding_mask=source.mask)
+        embedded = self.embed(source.padded)
+        output = self.module(embedded, src_key_padding_mask=source.mask)
         return base.ModuleOutput(output)
 
     def get_module(self) -> nn.TransformerEncoder:
@@ -264,14 +267,12 @@ class FeatureInvariantTransformerEncoder(TransformerEncoder):
         char_mask = (
             symbols < (self.num_embeddings - self.features_vocab_size)
         ).long()
-        type_embedding = self.esq * self.type_embedding(char_mask)
-        word_embedding = self.esq * self.embeddings(symbols)
-        positional_embedding = self.positional_encoding(
-            symbols, mask=char_mask
-        )
-        return self.dropout_layer(
-            word_embedding + positional_embedding + type_embedding
-        )
+        type_embedded = self.esq * self.type_embedding(char_mask)
+        word_embedded = self.esq * self.embeddings(symbols)
+        positional_embedded = self.positional_encoding(symbols, mask=char_mask)
+        embedded = word_embedded + positional_embedded + type_embedded
+        self.dropout_layer(embedded)
+        return embedded
 
     @property
     def name(self) -> str:

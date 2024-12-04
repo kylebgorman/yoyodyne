@@ -56,22 +56,22 @@ class RNNEncoder(RNNModule):
             base.ModuleOutput.
         """
         embedded = self.embed(source.padded)
-        # Packs embedded source symbols into a PackedSequence.
+        # Packs embedded source symbol into a PackedSequence.
         packed = nn.utils.rnn.pack_padded_sequence(
             embedded,
             source.lengths(),
             batch_first=True,
             enforce_sorted=False,
         )
-        # -> B x seq_len x encoder_dim, hiddens
-        packed_outs, hiddens = self.module(packed)
+        # -> B x seq_len x encoder_dim, hidden
+        packed_outs, hidden = self.module(packed)
         encoded, _ = nn.utils.rnn.pad_packed_sequence(
             packed_outs,
             batch_first=True,
             padding_value=special.PAD_IDX,
             total_length=None,
         )
-        return base.ModuleOutput(encoded, hiddens)
+        return base.ModuleOutput(encoded, hidden)
 
     @property
     def output_size(self) -> int:
@@ -117,55 +117,86 @@ class LSTMEncoder(RNNEncoder):
 class RNNDecoder(RNNModule):
     """Base class for RNN decoders."""
 
+    h0: nn.Parameter
+
     def __init__(self, decoder_input_size, *args, **kwargs):
         self.decoder_input_size = decoder_input_size
         super().__init__(*args, **kwargs)
+        self.h0 = nn.Parameter(torch.rand(self.hidden_size))
+
+    def _initial_symbol(self) -> torch.Tensor:
+        """The initial symbol.
+
+        Returns:
+            torch.Tensor: initial symbol.
+        """
+        return (
+            torch.tensor([special.START_IDX], device=self.device)
+            .repeat(self.batch_size)
+            .unsqueeze(1)
+        )
+
+    def _initial_hidden(self) -> torch.Tensor:
+        """The initial hidden state.
+
+        We treat this as a model parameter.
+
+        Returns:
+            torch.Tensor: initial hidden state.
+        """
+        return self.h0.repeat(self.decoder_layers, self.batch_size, 1)
 
     def forward(
         self,
-        symbol: torch.Tensor,
-        last_hiddens: torch.Tensor,
-        encoder_out: torch.Tensor,
+        decoder_input: base.ModuleOutput,
+        encoder_output: torch.Tensor,
         encoder_mask: torch.Tensor,
     ) -> base.ModuleOutput:
         """Single decode pass.
 
         Args:
-            symbol (torch.Tensor): previously decoded symbol of shape B x 1.
-            last_hiddens (Tuple[torch.Tensor, torch.Tensor]): last hidden
-                states from the decoder of shape
-                (1 x B x decoder_dim, 1 x B x decoder_dim).
-            encoder_out (torch.Tensor): encoded input sequence of shape
+            decoder_input (base.ModuleOutput): previously decoded symbol
+                of shape B x 1, last hidden state from the decoder of shape
+                1 x B x decoder_dim, and (where appropriate) the cell state of
+                the same dimensions as the hidden state.
+            encoder_output (torch.Tensor): encoded input sequence of shape
                 B x seq_len x encoder_dim.
             encoder_mask (torch.Tensor): mask for the encoded input batch of
                 shape B x seq_len.
 
         Returns:
-            base.ModuleOutput: decoder output, and the previous hidden states
-                from the decoder RNN.
+            base.ModuleOutput.
         """
-        embedded = self.embed(symbol)
-        # -> 1 x B x decoder_dim.
+        raise NotImplementedError
+
+    @staticmethod
+    def _last_encoder_output(
+        encoder_output: torch.Tensor, encoder_mask: torch.Tensor
+    ) -> torch.Tensor:
+        """Computes encoder output at the last non-masked symbol.
+
+        Args:
+            encoder_output (torch.Tensor): encoded input sequence of shape
+                B x seq_len x encoder_dim.
+            encoder_mask (torch.Tensor): mask for the encoded input batch of
+                shape B x seq_len.
+
+        Returns:
+            torch.Tensor.
+        """
         # Get the index of the last unmasked tensor.
         # -> B.
-        last_encoder_out_idxs = (~encoder_mask).sum(dim=1) - 1
+        last_encoder_output_idxs = (~encoder_mask).sum(dim=1) - 1
         # -> B x 1 x 1.
-        last_encoder_out_idxs = last_encoder_out_idxs.view(
-            encoder_out.size(0), 1, 1
+        last_encoder_output_idxs = last_encoder_output_idxs.view(
+            encoder_output.size(0), 1, 1
         )
         # -> 1 x 1 x encoder_dim. This indexes the last non-padded dimension.
-        last_encoder_out_idxs = last_encoder_out_idxs.expand(
-            -1, -1, encoder_out.size(-1)
+        last_encoder_output_idxs = last_encoder_output_idxs.expand(
+            -1, -1, encoder_output.size(-1)
         )
         # -> B x 1 x encoder_dim.
-        last_encoder_out = torch.gather(encoder_out, 1, last_encoder_out_idxs)
-        # The input to decoder RNN is the embedding concatenated to the
-        # weighted, encoded, inputs.
-        output, hiddens = self.module(
-            torch.cat((embedded, last_encoder_out), 2), last_hiddens
-        )
-        output = self.dropout_layer(output)
-        return base.ModuleOutput(output, hiddens)
+        return torch.gather(encoder_output, 1, last_encoder_output_idxs)
 
     @property
     def output_size(self) -> int:
@@ -185,6 +216,43 @@ class GRUDecoder(RNNDecoder):
             bidirectional=self.bidirectional,
         )
 
+    def initial_input(self) -> base.ModuleOutput:
+        """The decoder input at the start of decoding."""
+        symbol = self._initial_symbol()
+        hidden = self._initial_hidden()
+        return base.ModuleOutput(symbol, hidden)
+
+    def forward(
+        self,
+        decoder_input: base.ModuleOutput,
+        encoder_output: torch.Tensor,
+        encoder_mask: torch.Tensor,
+    ) -> base.ModuleOutput:
+        """Single decode pass.
+
+        Args:
+            decoder_input (base.ModuleOutput): previously decoded symbol
+                of shape B x 1, last hidden state from the decoder of shape
+                1 x B x decoder_dim.
+            encoder_output (torch.Tensor): encoded input sequence of shape
+                B x seq_len x encoder_dim.
+            encoder_mask (torch.Tensor): mask for the encoded input batch of
+                shape B x seq_len.
+
+        Returns:
+            base.ModuleOutput: decoder output, and the previous hidden states
+                from the decoder RNN.
+        """
+        embedded = self.embed(decoder_input.output)
+        last_encoder_output = self._last_encoder_output(
+            encoder_output, encoder_mask
+        )
+        decoder_output = self.module(
+            torch.cat((embedded, last_encoder_output), 2), decoder_input.hidden
+        )
+        self.dropout_layer(decoder_output.output)
+        return decoder_output
+
     @property
     def name(self) -> str:
         return "GRU"
@@ -192,6 +260,16 @@ class GRUDecoder(RNNDecoder):
 
 class LSTMDecoder(RNNDecoder):
     """LSTM decoder."""
+
+    # Implementationally this is identical to the GRU except the presence of
+    # the cell state and the initial cell state parameter.
+
+    c0: nn.Parameter
+
+    def __init__(self, decoder_input_size, *args, **kwargs):
+        self.decoder_input_size = decoder_input_size
+        super().__init__(*args, **kwargs)
+        self.c0 = nn.Parameter(torch.rand(self.hidden_size))
 
     def get_module(self) -> nn.LSTM:
         return nn.LSTM(
@@ -202,6 +280,56 @@ class LSTMDecoder(RNNDecoder):
             batch_first=True,
             bidirectional=self.bidirectional,
         )
+
+    def initial_input(self) -> base.ModuleOutput:
+        """The decoder input at the start of decoding."""
+        symbol = self._initial_symbol()
+        hidden = self._initial_hidden()
+        cell = self._initial_cell()
+        return base.ModuleOutput(symbol, hidden, cell)
+
+    def _initial_cell(self) -> torch.Tensor:
+        """The initial cell state.
+
+        We treat this as a model parameter.
+
+        Returns:
+            torch.Tensor: initial cell state.
+        """
+        return self.c0.repeat(self.decoder_layers, self.batch_size, 1)
+
+    def forward(
+        self,
+        decoder_input: base.ModuleOutput,
+        encoder_output: torch.Tensor,
+        encoder_mask: torch.Tensor,
+    ) -> base.ModuleOutput:
+        """Single decode pass.
+
+        Args:
+            decoder_input (base.ModuleOutput): previously decoded symbol
+                of shape B x 1, last hidden state from the decoder of shape
+                1 x B x decoder_dim, and the cell state of the same dimensions
+                as the hidden state.
+            encoder_output (torch.Tensor): encoded input sequence of shape
+                B x seq_len x encoder_dim.
+            encoder_mask (torch.Tensor): mask for the encoded input batch of
+                shape B x seq_len.
+
+        Returns:
+            base.ModuleOutput: decoder output, and the previous hidden state
+                and cell state from the decoder RNN.
+        """
+        embedded = self.embed(decoder_input.output)
+        last_encoder_output = self._last_encoder_output(
+            encoder_output, encoder_mask
+        )
+        decoder_output = self.module(
+            torch.cat((embedded, last_encoder_output), 2),
+            (decoder_input.hidden, decoder_input.cell),
+        )
+        self.dropout_layer(decoder_output.output)
+        return decoder_output
 
     @property
     def name(self) -> str:
@@ -223,35 +351,35 @@ class AttentiveGRUDecoder(AttentiveRNNDecoder, GRUDecoder):
 
     def forward(
         self,
-        symbol: torch.Tensor,
-        last_hiddens: torch.Tensor,
-        encoder_out: torch.Tensor,
+        decoder_input: base.ModuleOutput,
+        encoder_output: torch.Tensor,
         encoder_mask: torch.Tensor,
     ) -> base.ModuleOutput:
         """Single decode pass.
 
         Args:
-            symbol (torch.Tensor): previously decoded symbol of shape B x 1.
-            last_hiddens (torch.Tensor): last hidden states from the decoder
-                of shape 1 x B x decoder_dim.
-            encoder_out (torch.Tensor): encoded input sequence of shape
+            decoder_input (base.ModuleOutput): previously decoded symbol
+                of shape B x 1, last hidden state from the decoder of shape
+                1 x B x decoder_dim.
+                the same dimensions as the hidden state.
+            encoder_output (torch.Tensor): encoded input sequence of shape
                 B x seq_len x encoder_dim.
             encoder_mask (torch.Tensor): mask for the encoded input batch of
                 shape B x seq_len.
 
         Returns:
-            base.ModuleOutput: decoder output, and the previous hidden states
+            base.ModuleOutput: decoder output, and the previous hidden state
                 from the decoder RNN.
         """
         embedded = self.embed(symbol)
         context, _ = self.attention(
-            last_hiddens.transpose(0, 1), encoder_out, encoder_mask
+            decoder_input.hidden.transpose(0, 1), encoder_output, encoder_mask
         )
-        output, hiddens = self.module(
-            torch.cat((embedded, context), 2), last_hiddens
+        decoder_output = self.module(
+            torch.cat((embedded, context), 2), decoder_input.hidden
         )
-        output = self.dropout_layer(output)
-        return base.ModuleOutput(output, hiddens)
+        self.dropout_layer(decoder_output.output)
+        return decoder_output
 
     @property
     def name(self) -> str:
@@ -261,44 +389,45 @@ class AttentiveGRUDecoder(AttentiveRNNDecoder, GRUDecoder):
 class AttentiveLSTMDecoder(AttentiveRNNDecoder, LSTMDecoder):
     """Attentive LSTM decoder."""
 
+    # Implementationally this is identical to the GRU except the presence of
+    # the cell state.
+
+    @property
+    def name(self) -> str:
+        return "attentive LSTM"
+
     def forward(
         self,
-        symbol: torch.Tensor,
-        last_hiddens: Tuple[torch.Tensor, torch.Tensor],
-        encoder_out: torch.Tensor,
+        decoder_input: base.ModuleOutput,
+        encoder_output: torch.Tensor,
         encoder_mask: torch.Tensor,
     ) -> base.ModuleOutput:
         """Single decode pass.
 
         Args:
-            symbol (torch.Tensor): previously decoded symbol of shape B x 1.
-            last_hiddens (Tuple[torch.Tensor, torch.Tensor]): last hidden
-                and cell state from the decoder of shape 1 x B x decoder_dim.
-            encoder_out (torch.Tensor): encoded input sequence of shape
+            decoder_input (base.ModuleOutput): previously decoded symbol
+                of shape B x 1, last hidden state from the decoder of shape
+                1 x B x decoder_dim, and the cell state of the same dimensions
+                as the hidden state.
+            encoder_output (torch.Tensor): encoded input sequence of shape
                 B x seq_len x encoder_dim.
             encoder_mask (torch.Tensor): mask for the encoded input batch of
                 shape B x seq_len.
 
         Returns:
-            base.ModuleOutput: decoder output, and the previous hidden states
+            base.ModuleOutput: decoder output, and the previous hidden state
                 from the decoder RNN.
         """
-        # The last hiddens includes the cell state, which isn't needed for the
-        # forward pass.
         embedded = self.embed(symbol)
-        last_h0, last_c0 = last_hiddens
         context, _ = self.attention(
-            last_h0.transpose(0, 1), encoder_out, encoder_mask
+            decoder_input.hidden.transpose(0, 1), encoder_output, encoder_mask
         )
-        output, hiddens = self.module(
-            torch.cat((embedded, context), 2), last_hiddens
+        decoder_output = self.module(
+            torch.cat((embedded, context), 2),
+            (decoder_input.hidden, decoder_input.cell),
         )
-        output = self.dropout_layer(output)
-        return base.ModuleOutput(output, hiddens)
-
-    @property
-    def name(self) -> str:
-        return "attentive LSTM"
+        self.dropout_layer(decoder_output.output)
+        return decoder_output
 
 
 class HardAttentionRNNDecoder(RNNDecoder):
@@ -315,10 +444,52 @@ class HardAttentionRNNDecoder(RNNDecoder):
             self.decoder_input_size, self.hidden_size
         )
 
-    def _alignment_step(
+    def forward(
         self,
+        decoder_input: base.ModuleOutput,
+        encoder_output: torch.Tensor,
+        encoder_mask: torch.Tensor,
+    ) -> base.ModuleOutput:
+        """Single decode pass.
+
+        Args:
+            decoder_input (base.ModuleOutput): previously decoded symbol
+                of shape B x 1, last hidden state from the decoder of shape
+                1 x B x decoder_dim, and (where appropriate) the cell state
+                of the same dimensions as the hidden state.
+            encoder_output (torch.Tensor): encoded input sequence of shape
+                (B x seq_len x encoder_dim).
+            encoder_mask (torch.Tensor): mask for the encoded input batch of
+                shape (B x seq_len).
+
+        Returns:
+            base.ModuleOutput: step-wise emission probabilities, alignment
+                matrix, and hidden states of decoder.
+        """
+        embedded = self.embed(decoder_input)
+        decoded, *rest = self.module(embedded, last_hidden)
+        emissions = self._emissions(decoder_output, encoder_output)
+        alignment = self._alignments(decoded, encoder_output, encoder_mask)
+        return base.ModuleOutput(emissions, *rest, embeddings=alignment)
+
+    @staticmethod
+    def _emissions(output: base.ModuleOutput, encoder_output) -> torch.Tensor:
+        """Computes emission probabilities over each hidden state.
+
+        Args:
+            output (torch.Tensor): previously output symbol of shape B x 1.
+            encoder_output (torch.Tensor): encoded input sequence of shape
+                (B x seq_len x encoder_dim).
+        """
+        output = output.expand(-1, encoder_output.shape[1], -1)
+        output = torch.cat([output, encoder_output], dim=-1)
+        output = self.output_proj(output)
+        return output
+
+    @staticmethod
+    def _alignments(
         decoded: torch.Tensor,
-        encoder_out: torch.Tensor,
+        encoder_output: torch.Tensor,
         encoder_mask: torch.Tensor,
     ) -> torch.Tensor:
         """Creates alignment matrix for current timestep.
@@ -335,10 +506,10 @@ class HardAttentionRNNDecoder(RNNDecoder):
             Meeting of the Association for Computational Linguistics_, pages
             1530-1537.
 
-        Args:
+        Args
             decoded (torch.Tensor): output from decoder for current timesstep
                 of shape B x 1 x decoder_dim.
-            encoder_out (torch.Tensor): encoded input sequence of shape
+            encoder_output (torch.Tensor): encoded input sequence of shape
                 B x seq_len x encoder_dim.
             encoder_mask (torch.Tensor): mask for the encoded input batch of
                 shape B x seq_len.
@@ -348,12 +519,12 @@ class HardAttentionRNNDecoder(RNNDecoder):
                 B x seq_len.
         """
         alignment_scores = torch.bmm(
-            self.scale_encoded(encoder_out), decoded.transpose(1, 2)
+            self.scale_encoded(encoder_output), decoded.transpose(1, 2)
         ).squeeze(-1)
         # Gets probability of alignments.
         alignment_probs = nn.functional.softmax(alignment_scores, dim=-1)
         # Mask padding.
-        alignment_probs = alignment_probs * (~encoder_mask) + 1e-7
+        alignment_probs = alignment_probs * (~encoder_mask) + special.EPSILON
         alignment_probs = alignment_probs / alignment_probs.sum(
             dim=-1, keepdim=True
         )
@@ -363,40 +534,6 @@ class HardAttentionRNNDecoder(RNNDecoder):
             .unsqueeze(1)
             .expand(-1, encoder_out.shape[1], -1)
         )
-
-    def forward(
-        self,
-        symbol: torch.Tensor,
-        last_hiddens: torch.Tensor,
-        encoder_out: torch.Tensor,
-        encoder_mask: torch.Tensor,
-    ) -> base.ModuleOutput:
-        """Single decode pass.
-
-        Args:
-            symbol (torch.Tensor): previously decoded symbol of shape (B x 1).
-            last_hiddens (Tuple[torch.Tensor, torch.Tensor]): last hidden
-                states from the decoder of shape
-                (1 x B x decoder_dim, 1 x B x decoder_dim).
-            encoder_out (torch.Tensor): encoded input sequence of shape
-                (B x seq_len x encoder_dim).
-            encoder_mask (torch.Tensor): mask for the encoded input batch of
-                shape (B x seq_len).
-
-        Returns:
-            base.ModuleOutput: step-wise emission probabilities, alignment
-                matrix, and hidden states of decoder.
-        """
-        # Encodes current symbol.
-        embedded = self.embed(symbol)
-        decoded, hiddens = self.module(embedded, last_hiddens)
-        # Gets emission probabilities over each hidden state (source symbol).
-        output = decoded.expand(-1, encoder_out.shape[1], -1)
-        output = torch.cat([output, encoder_out], dim=-1)
-        output = self.output_proj(output)
-        # Gets transition probabilities (alignment) for current states.
-        alignment = self._alignment_step(decoded, encoder_out, encoder_mask)
-        return base.ModuleOutput(output, hiddens, embeddings=alignment)
 
     @property
     def output_size(self) -> int:
@@ -450,19 +587,33 @@ class ContextHardAttentionRNNDecoder(HardAttentionRNNDecoder):
             self.hidden_size * 2, (attention_context * 2) + 1
         )
 
-    def _alignment_step(
+    def _alignments(
         self,
         decoded: torch.Tensor,
-        encoder_out: torch.Tensor,
+        encoder_output: torch.Tensor,
         encoder_mask: torch.Tensor,
     ) -> torch.Tensor:
+        """Creates alignment matrix for current timestep.
+
+        Args
+            decoded (torch.Tensor): output from decoder for current timesstep
+                of shape B x 1 x decoder_dim.
+            encoder_output (torch.Tensor): encoded input sequence of shape
+                B x seq_len x encoder_dim.
+            encoder_mask (torch.Tensor): mask for the encoded input batch of
+                shape B x seq_len.
+
+        Returns:
+            torch.Tensor: alignment scores across the source sequence of shape
+                B x seq_len.
+        """
         # Matrix multiplies encoding and decoding for alignment
         # representations. See: https://aclanthology.org/P19-1148/.
-        # Expands decoded to concatenate with alignments
+        # Expands decoded to concatenate with alignments.
         decoded = decoded.expand(-1, encoder_out.shape[1], -1)
         # -> B x seq_len.
         alignment_scores = torch.cat(
-            [self.scale_encoded(encoder_out), decoded], dim=2
+            [self.scale_encoded(encoder_output), decoded], dim=2
         )
         alignment_scores = self.alignment_proj(alignment_scores)
         alignment_probs = nn.functional.softmax(alignment_scores, dim=-1)

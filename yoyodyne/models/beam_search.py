@@ -1,5 +1,20 @@
 """Beam search classes.
 
+A BeamCell is a (possibly partial) hypothesis containing the decoder output,
+the symbol sequence, and the hypothesis's log-likelihood. BeamCells can generate
+their candidate extensions (in the form of new BeamCells) when provided with
+additional decoder output; they also know when they have reached a final state
+(i.e., when END has been generated).
+
+A Beam holds a collection of BeamCells; it knows when all these hypotheses have
+reached a final state.
+
+A BeamHelper is a heap of possible extensions; heap size is constrained by 
+beam width. "Recording" a cell and the associated decoder output causes its
+extensions to be inserted into the heap. It has a context manager interface;
+entering the context empties the heap and exiting it "flattens" the heap into
+an ordinary list. It can then be used to update the beam.
+
 Current limitations:
 
 * Beam search uses Python's heap implementation; this is reasonably performant
@@ -7,12 +22,11 @@ Current limitations:
   better pure PyTorch solution.
 * Beam search assumes a batch size of 1; it is not clear how to extend it to
   larger batches.
-* We work with log-likelihoods exclusively and thus addition of two log
-  probabilities is equivalent to multiplication of real numbers.
+* We hard-code the use of log-likelihoods; the addition of two log
+  probabilities is equivalent to multiplying real numbers.
 * Beam search is designed to support RNN and attentive RNN models; it has not
   yet been generalized for other model types.
-* Not much attention has been paid to keeping things on device, under the
-  hypothesis this is mostly on CPU anyways.
+* Not much attention has been paid to keeping data on device.
 
 Sample usage:
 
@@ -40,8 +54,6 @@ Sample usage:
         )
         return predictions, loglikes
 """
-
-from __future__ import annotations
 
 import dataclasses
 import heapq
@@ -118,24 +130,24 @@ class BeamHelper:
     heap: List[BeamCell] = []
 
     def __enter__(self) -> BeamHelper:
+        self.heap.clear()
         return self
 
-    # TODO: test if operator.itemgetter is faster on dataclasses.
-    beam_key = operator.attrgettr("loglike")
+    _beam_key = operator.attrgettr("loglike")
 
     def record(
         self, cell: BeamCell, decoder_output: base.ModuleOutput
     ) -> None:
         for new_cell in cell.extensions(decoder_output):
             if len(self.new_beam) < self.beam_width:
-                heapq.heappush(self.heap, new_cell, key=self.beam_key)
+                heapq.heappush(self.heap, new_cell, key=self._beam_key)
             else:
-                heapq.heappushpop(self.heap, new_cell, key=self.beam_key)
+                heapq.heappushpop(self.heap, new_cell, key=self._beam_key)
 
     def __exit__(self):
         # Sorts hypotheses so the minimum log-likelihood is the first
         # element; we think this is faster than calling heapq.nlargest.
-        self.heap.sort(key=self.beam_key, reverse=True)
+        self.heap.sort(key=self._beam_key, reverse=True)
 
     def update(self) -> Beam:
         return Beam(self.heap)
