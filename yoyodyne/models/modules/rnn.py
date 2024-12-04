@@ -122,30 +122,6 @@ class RNNDecoder(RNNModule):
         super().__init__(*args, **kwargs)
         # self.h0 = nn.Parameter(torch.rand(self.hidden_size))
 
-    '''
-    def _initial_symbol(self) -> torch.Tensor:
-        """The initial symbol.
-
-        Returns:
-            torch.Tensor: initial symbol.
-        """
-        return (
-            torch.tensor([special.START_IDX], device=self.device)
-            .repeat(self.batch_size)
-            .unsqueeze(1)
-        )
-
-    def _initial_hidden(self) -> torch.Tensor:
-        """The initial hidden state.
-
-        We treat this as a model parameter.
-
-        Returns:
-            torch.Tensor: initial hidden state.
-        """
-        return self.h0.repeat(self.decoder_layers, self.batch_size, 1)
-    '''
-
     def forward(
         self,
         decoder_input: base.ModuleOutput,
@@ -249,11 +225,12 @@ class GRUDecoder(RNNDecoder):
         last_encoder_output = self._last_encoder_output(
             encoder_output, encoder_mask
         )
-        decoder_output = self.module(
-            torch.cat((embedded, last_encoder_output), 2), decoder_input.hidden
+
+        output, hidden = self.module( torch.cat((embedded, last_encoder_output), 2),
+            (decoder_input.hidden, decoder_input.cell),
         )
-        self.dropout_layer(decoder_output.output)
-        return decoder_output
+        self.dropout_layer(output)
+        return base.ModuleOutput(output, hidden)
 
     @property
     def name(self) -> str:
@@ -262,17 +239,6 @@ class GRUDecoder(RNNDecoder):
 
 class LSTMDecoder(RNNDecoder):
     """LSTM decoder."""
-
-    """
-    # Implementationally this is identical to the GRU except the presence of
-    # the cell state and the initial cell state parameter.
-
-    c0: nn.Parameter
-
-    def __init__(self, decoder_input_size, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.c0 = nn.Parameter(torch.rand(self.hidden_size))
-    """
 
     def get_module(self) -> nn.LSTM:
         return nn.LSTM(
@@ -283,25 +249,6 @@ class LSTMDecoder(RNNDecoder):
             batch_first=True,
             bidirectional=self.bidirectional,
         )
-
-    '''
-    def initial_input(self) -> base.ModuleOutput:
-        """The decoder input at the start of decoding."""
-        symbol = self._initial_symbol()
-        hidden = self._initial_hidden()
-        cell = self._initial_cell()
-        return base.ModuleOutput(symbol, hidden, cell)
-
-    def _initial_cell(self) -> torch.Tensor:
-        """The initial cell state.
-
-        We treat this as a model parameter.
-
-        Returns:
-            torch.Tensor: initial cell state.
-        """
-        return self.c0.repeat(self.decoder_layers, self.batch_size, 1)
-    '''
 
     def forward(
         self,
@@ -329,12 +276,12 @@ class LSTMDecoder(RNNDecoder):
         last_encoder_output = self._last_encoder_output(
             encoder_output, encoder_mask
         )
-        decoder_output = self.module(
+        output, (hidden, cell) = self.module(
             torch.cat((embedded, last_encoder_output), 2),
             (decoder_input.hidden, decoder_input.cell),
         )
-        self.dropout_layer(decoder_output.output)
-        return decoder_output
+        self.dropout_layer(output)
+        return base.ModuleOutput(output, hidden, cell)
 
     @property
     def name(self) -> str:
@@ -380,11 +327,11 @@ class AttentiveGRUDecoder(AttentiveRNNDecoder, GRUDecoder):
         context, _ = self.attention(
             decoder_input.hidden.transpose(0, 1), encoder_output, encoder_mask
         )
-        output, *rest = self.module(
+        output, hidden = self.module(
             torch.cat((embedded, context), 2), decoder_input.hidden
         )
         self.dropout_layer(output)
-        return base.ModuleOutput(output, *rest)
+        return base.ModuleOutput(output, hidden)
 
     @property
     def name(self) -> str:
@@ -427,12 +374,12 @@ class AttentiveLSTMDecoder(AttentiveRNNDecoder, LSTMDecoder):
         context, _ = self.attention(
             decoder_input.hidden.transpose(0, 1), encoder_output, encoder_mask
         )
-        decoder_output = self.module(
+        output, (hidden, cell) = self.module(
             torch.cat((embedded, context), 2),
             (decoder_input.hidden, decoder_input.cell),
         )
-        self.dropout_layer(decoder_output.output)
-        return decoder_output
+        self.dropout_layer(output)
+        return base.ModuleOutput(output, hidden, cell)
 
 
 class HardAttentionRNNDecoder(RNNDecoder):
