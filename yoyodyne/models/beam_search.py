@@ -1,15 +1,15 @@
 """Beam search classes.
 
 A BeamCell is a (possibly partial) hypothesis containing the decoder output,
-the symbol sequence, and the hypothesis's log-likelihood. BeamCells can generate
-their candidate extensions (in the form of new BeamCells) when provided with
-additional decoder output; they also know when they have reached a final state
-(i.e., when END has been generated).
+the symbol sequence, and the hypothesis's log-likelihood. BeamCells can
+generate their candidate extensions (in the form of new BeamCells) when
+provided with additional decoder output; they also know when they have reached
+a final state (i.e., when END has been generated).
 
 A Beam holds a collection of BeamCells; it knows when all these hypotheses have
 reached a final state.
 
-A BeamHelper is a heap of possible extensions; heap size is constrained by 
+A BeamHelper is a heap of possible extensions; heap size is constrained by
 beam width. "Recording" a cell and the associated decoder output causes its
 extensions to be inserted into the heap. It has a context manager interface;
 entering the context empties the heap and exiting it "flattens" the heap into
@@ -55,38 +55,37 @@ Sample usage:
         return predictions, loglikes
 """
 
+from __future__ import annotations
+
 import dataclasses
 import heapq
-import operator
 
 from typing import Iterator, List
 
 from torch import nn
 
-from . import base
+from . import modules
 from .. import special
 
 
+@dataclasses.dataclass(order=True)
 class BeamCell:
     """Represents a (partial) hypotheses in the beam search.
 
+    The class is sorted by the log-likelihood field.
+
     Args:
-        decoder_input (base.ModuleOutput).
+        decoder_input (modules.ModuleOutput).
     """
 
-    decoder_input: base.ModuleOutput
-    # List of symbols in the hypothesis.
-    symbols: List[int]
-    # Log-likelihood of the hypothesis.
-    loglike: float
-
-    def __init__(self, decoder_input: base.ModuleOutput):
-        self.decoder_input = decoder_input
-        self.symbols = [special.START_IDX]
-        self.loglike = 0.0
+    decoder_input: modules.ModuleOutput = dataclasses.field(compare=False)
+    symbols: List[int] = dataclasses.field(
+        compare=False, default_factory=lambda: [special.IDX]
+    )
+    loglike: float = dataclasses.field(default_factory=float)  # AKA 0.0.
 
     def extensions(
-        self, decoder_output: base.ModuleOutput
+        self, decoder_output: modules.ModuleOutput
     ) -> Iterator[BeamCell]:
         if self.final:
             # No extensions are possible.
@@ -122,32 +121,33 @@ class Beam:
         return all(cell.final for cell in self.cells)
 
 
-@dataclasses.dataclass
 class BeamHelper:
     """Helps extend a beam."""
 
     beam_width: int
     heap: List[BeamCell] = []
 
+    def __init__(self, beam_width: int):
+        self.beam_width = beam_width
+        self.heap = []
+
     def __enter__(self) -> BeamHelper:
         self.heap.clear()
         return self
 
-    _beam_key = operator.attrgettr("loglike")
-
     def record(
-        self, cell: BeamCell, decoder_output: base.ModuleOutput
+        self, cell: BeamCell, decoder_output: modules.ModuleOutput
     ) -> None:
         for new_cell in cell.extensions(decoder_output):
             if len(self.new_beam) < self.beam_width:
-                heapq.heappush(self.heap, new_cell, key=self._beam_key)
+                heapq.heappush(self.heap, new_cell)
             else:
-                heapq.heappushpop(self.heap, new_cell, key=self._beam_key)
+                heapq.heappushpop(self.heap, new_cell)
 
     def __exit__(self):
         # Sorts hypotheses so the minimum log-likelihood is the first
         # element; we think this is faster than calling heapq.nlargest.
-        self.heap.sort(key=self._beam_key, reverse=True)
+        self.heap.sort(reverse=True)
 
     def update(self) -> Beam:
         return Beam(self.heap)

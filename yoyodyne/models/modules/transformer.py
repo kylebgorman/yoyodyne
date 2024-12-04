@@ -163,7 +163,7 @@ class TransformerModule(base.BaseModule):
         """
         word_embedded = self.esq * self.embeddings(symbols)
         positional_embedded = self.positional_encoding(symbols)
-        embedded = word_embedded + positional_embedding
+        embedded = word_embedded + positional_embedded
         self.dropout_layer(embedded)
         return embedded
 

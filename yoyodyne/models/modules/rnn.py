@@ -1,7 +1,5 @@
 """RNN module classes."""
 
-from typing import Tuple
-
 import torch
 from torch import nn
 
@@ -117,13 +115,14 @@ class LSTMEncoder(RNNEncoder):
 class RNNDecoder(RNNModule):
     """Base class for RNN decoders."""
 
-    h0: nn.Parameter
+    # h0: nn.Parameter
 
     def __init__(self, decoder_input_size, *args, **kwargs):
         self.decoder_input_size = decoder_input_size
         super().__init__(*args, **kwargs)
-        self.h0 = nn.Parameter(torch.rand(self.hidden_size))
+        # self.h0 = nn.Parameter(torch.rand(self.hidden_size))
 
+    '''
     def _initial_symbol(self) -> torch.Tensor:
         """The initial symbol.
 
@@ -145,6 +144,7 @@ class RNNDecoder(RNNModule):
             torch.Tensor: initial hidden state.
         """
         return self.h0.repeat(self.decoder_layers, self.batch_size, 1)
+    '''
 
     def forward(
         self,
@@ -216,11 +216,13 @@ class GRUDecoder(RNNDecoder):
             bidirectional=self.bidirectional,
         )
 
+    '''
     def initial_input(self) -> base.ModuleOutput:
         """The decoder input at the start of decoding."""
         symbol = self._initial_symbol()
         hidden = self._initial_hidden()
         return base.ModuleOutput(symbol, hidden)
+    '''
 
     def forward(
         self,
@@ -261,15 +263,16 @@ class GRUDecoder(RNNDecoder):
 class LSTMDecoder(RNNDecoder):
     """LSTM decoder."""
 
+    """
     # Implementationally this is identical to the GRU except the presence of
     # the cell state and the initial cell state parameter.
 
     c0: nn.Parameter
 
     def __init__(self, decoder_input_size, *args, **kwargs):
-        self.decoder_input_size = decoder_input_size
         super().__init__(*args, **kwargs)
         self.c0 = nn.Parameter(torch.rand(self.hidden_size))
+    """
 
     def get_module(self) -> nn.LSTM:
         return nn.LSTM(
@@ -281,6 +284,7 @@ class LSTMDecoder(RNNDecoder):
             bidirectional=self.bidirectional,
         )
 
+    '''
     def initial_input(self) -> base.ModuleOutput:
         """The decoder input at the start of decoding."""
         symbol = self._initial_symbol()
@@ -297,6 +301,7 @@ class LSTMDecoder(RNNDecoder):
             torch.Tensor: initial cell state.
         """
         return self.c0.repeat(self.decoder_layers, self.batch_size, 1)
+    '''
 
     def forward(
         self,
@@ -371,15 +376,15 @@ class AttentiveGRUDecoder(AttentiveRNNDecoder, GRUDecoder):
             base.ModuleOutput: decoder output, and the previous hidden state
                 from the decoder RNN.
         """
-        embedded = self.embed(symbol)
+        embedded = self.embed(decoder_input.output)
         context, _ = self.attention(
             decoder_input.hidden.transpose(0, 1), encoder_output, encoder_mask
         )
-        decoder_output = self.module(
+        output, *rest = self.module(
             torch.cat((embedded, context), 2), decoder_input.hidden
         )
-        self.dropout_layer(decoder_output.output)
-        return decoder_output
+        self.dropout_layer(output)
+        return base.ModuleOutput(output, *rest)
 
     @property
     def name(self) -> str:
@@ -418,7 +423,7 @@ class AttentiveLSTMDecoder(AttentiveRNNDecoder, LSTMDecoder):
             base.ModuleOutput: decoder output, and the previous hidden state
                 from the decoder RNN.
         """
-        embedded = self.embed(symbol)
+        embedded = self.embed(decoder_input.output)
         context, _ = self.attention(
             decoder_input.hidden.transpose(0, 1), encoder_output, encoder_mask
         )
@@ -466,14 +471,15 @@ class HardAttentionRNNDecoder(RNNDecoder):
             base.ModuleOutput: step-wise emission probabilities, alignment
                 matrix, and hidden states of decoder.
         """
-        embedded = self.embed(decoder_input)
-        decoded, *rest = self.module(embedded, last_hidden)
-        emissions = self._emissions(decoder_output, encoder_output)
-        alignment = self._alignments(decoded, encoder_output, encoder_mask)
-        return base.ModuleOutput(emissions, *rest, embeddings=alignment)
+        embedded = self.embed(decoder_input.output)
+        decoded, *rest = self.module(embedded, decoder_input.hidden)
+        emissions = self._emissions(decoder_input, encoder_output)
+        alignments = self._alignments(decoded, encoder_output, encoder_mask)
+        return base.ModuleOutput(emissions, *rest, embeddings=alignments)
 
-    @staticmethod
-    def _emissions(output: base.ModuleOutput, encoder_output) -> torch.Tensor:
+    def _emissions(
+        self, output: base.ModuleOutput, encoder_output
+    ) -> torch.Tensor:
         """Computes emission probabilities over each hidden state.
 
         Args:
@@ -486,8 +492,8 @@ class HardAttentionRNNDecoder(RNNDecoder):
         output = self.output_proj(output)
         return output
 
-    @staticmethod
     def _alignments(
+        self,
         decoded: torch.Tensor,
         encoder_output: torch.Tensor,
         encoder_mask: torch.Tensor,
@@ -532,7 +538,7 @@ class HardAttentionRNNDecoder(RNNDecoder):
         return (
             alignment_probs.log()
             .unsqueeze(1)
-            .expand(-1, encoder_out.shape[1], -1)
+            .expand(-1, encoder_output.shape[1], -1)
         )
 
     @property
@@ -610,7 +616,7 @@ class ContextHardAttentionRNNDecoder(HardAttentionRNNDecoder):
         # Matrix multiplies encoding and decoding for alignment
         # representations. See: https://aclanthology.org/P19-1148/.
         # Expands decoded to concatenate with alignments.
-        decoded = decoded.expand(-1, encoder_out.shape[1], -1)
+        decoded = decoded.expand(-1, encoder_output.shape[1], -1)
         # -> B x seq_len.
         alignment_scores = torch.cat(
             [self.scale_encoded(encoder_output), decoded], dim=2

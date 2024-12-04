@@ -1,7 +1,7 @@
 """Base module class with PL integration."""
 
 import dataclasses
-from typing import Optional, Union, Tuple
+from typing import Optional
 
 import lightning
 import torch
@@ -15,14 +15,17 @@ class ModuleOutput:
     """Output for forward passes."""
 
     output: torch.Tensor
-    hiddens: Optional[
-        Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
-    ] = None
+    hidden: Optional[torch.Tensor] = None  # For RNNs.
+    cell: Optional[torch.Tensor] = None  # For LSTMs in particular.
     embeddings: Optional[torch.Tensor] = None
 
     @property
-    def has_hiddens(self) -> bool:
-        return self.hiddens is not None
+    def has_hidden(self) -> bool:
+        return self.hidden is not None
+
+    @property
+    def has_cell(self) -> bool:
+        return self.cell is not None
 
     @property
     def has_embeddings(self) -> bool:

@@ -1,7 +1,6 @@
 """RNN model classes."""
 
 import argparse
-import heapq
 from typing import Optional, Tuple, Union
 
 import torch
@@ -20,10 +19,12 @@ class RNNModel(base.BaseModel):
 
     # Constructed inside __init__.
     classifier: nn.Linear
+    h0: nn.Parameter
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.classifier = nn.Linear(self.hidden_size, self.target_vocab_size)
+        self.h0 = nn.Parameter(torch.rand(self.hidden_size))
 
     def init_embeddings(
         self,
@@ -40,6 +41,38 @@ class RNNModel(base.BaseModel):
             nn.Embedding: embedding layer.
         """
         return embeddings.normal_embedding(num_embeddings, embedding_size)
+
+    def initial_input(self, batch_size: int) -> modules.ModuleOutput:
+        """The decoder input at the start of decoding."""
+        raise NotImplementedError
+
+    def _initial_symbol(self, batch_size: int) -> torch.Tensor:
+        """The initial symbol.
+
+        Args:
+            batch_size (int).
+
+        Returns:
+            torch.Tensor: initial symbol.
+        """
+        return (
+            torch.tensor([special.START_IDX], device=self.device)
+            .repeat(batch_size)
+            .unsqueeze(1)
+        )
+
+    def _initial_hidden(self, batch_size: int) -> torch.Tensor:
+        """The initial hidden state.
+
+        We treat this as a model parameter.
+
+        Args:
+            batch_size (int).
+
+        Returns:
+            torch.Tensor: initial hidden state.
+        """
+        return self.h0.repeat(self.decoder_layers, batch_size, 1)
 
     '''
     def beam_decode(
@@ -195,29 +228,35 @@ class RNNModel(base.BaseModel):
                 batch_size x target_vocab_size.
         """
         batch_size = encoder_mask.shape[0]
-        decoder_output = self.decoder.initial_input()
+        # Misleadingly named beacuse we only need to keep track of what is
+        # output from the previous step; we don't need copies of both input
+        # and output at any point.
+        decoder_output = self.initial_input(batch_size)
         predictions = []
         num_steps = (
             target.size(1) if target is not None else self.max_target_length
         )
-        # Tracks when each sequence has decoded an END; not needed when using teacher forcing.
+        # Tracks when each sequence has decoded an END; not needed when using
+        # teacher forcing.
         finished = (
             None
             if teacher_forcing
             else torch.zeros(batch_size, dtype=torch.bool, device=self.device)
         )
         for t in range(num_steps):
-            decoder_output = self.decode_step(
+            decoder_output = self.decoder(
                 decoder_output, encoder_output, encoder_mask
             )
-            predictions.append(decoder_output.output)
+            logits = self.classifier(decoder_output.output)
+            predictions.append(logits.squeeze(1))
             if teacher_forcing:
-                # Replaces the hypothesized logits with the gold ones.
+                # Inserts the gold "teacher" predictions.
                 decoder_output.output = target[:, t].unsqueeze(1)
             else:
-                hypotheses = self._get_predicted(decoder_output.output)
+                # Inserts the "student" predictions.
+                decoder_output.output = self._get_predicted(logits)
                 finished = torch.logical_or(
-                    finished, (hypotheses.output == special.END_IDX)
+                    finished, (decoder_output.output == special.END_IDX)
                 )
                 if finished.all():
                     # Breaks when all sequences have predicted an END symbol.
@@ -225,33 +264,35 @@ class RNNModel(base.BaseModel):
                     # only break once we have decoded at least the the same
                     # number of steps as the target length.
                     if target is None or (
-                        hypotheses.output.size(-1) >= target.size(-1)
+                        decoder_output.output.size(-1) >= target.size(-1)
                     ):
                         break
         predictions = torch.stack(predictions)
         return predictions
 
+    '''
     def decode_step(
         self,
-        decoder_input: base.ModuleOutput,
+        decoder_input: modules.ModuleOutput,
         encoder_output: torch.Tensor,
         encoder_mask: torch.Tensor,
-    ) -> base.ModuleOutput:
+    ) -> modules.ModuleOutput:
         """Decodes a single symbol.
 
         Args:
-            decoder_input (base.ModuleOutput).
+            decoder_input (modules.ModuleOutput).
             encoder_output (torch.Tensor).
             encoder_mask (torch.Tensor).
 
         Returns:
-            base.ModuleOutput.
+            modules.ModuleOutput.
         """
         decoder_output = self.decoder(
             decoder_input, encoder_output, encoder_mask
         )
-        decoder_output.output = self.classifier(decoded.output).squeeze(1)
+        decoder_output.output = self.classifier(decoder_output.output)
         return decoder_output
+    '''
 
     def forward(
         self,
@@ -283,7 +324,7 @@ class RNNModel(base.BaseModel):
             return predictions, scores
         else:
             predictions = self.greedy_decode(
-                encoder_out.output,
+                encoder_output.output,
                 batch.source.mask,
                 self.teacher_forcing if self.training else False,
                 batch.target.padded if batch.target else None,
@@ -338,6 +379,19 @@ class GRUModel(RNNModel):
             num_embeddings=self.vocab_size,
         )
 
+    def initial_input(self, batch_size: int) -> modules.ModuleOutput:
+        """The decoder input at the start of decoding.
+
+        Args:
+            batch_size (int).
+
+        Returns:
+            modules.ModuleOutput.
+        """
+        symbol = self._initial_symbol(batch_size)
+        hidden = self._initial_hidden(batch_size)
+        return modules.ModuleOutput(symbol, hidden)
+
     @property
     def name(self) -> str:
         return "GRU"
@@ -351,6 +405,15 @@ class LSTMModel(RNNModel):
         **kwargs: passed to superclass.
     """
 
+    # Implementationally this is identical to the GRU except the presence of
+    # the cell state and the initial cell state parameter.
+
+    c0: nn.Parameter
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.c0 = nn.Parameter(torch.rand(self.hidden_size))
+
     def get_decoder(self) -> modules.LSTMDecoder:
         return modules.LSTMDecoder(
             bidirectional=False,
@@ -362,6 +425,33 @@ class LSTMModel(RNNModel):
             layers=self.decoder_layers,
             num_embeddings=self.vocab_size,
         )
+
+    def initial_input(self, batch_size: int) -> modules.ModuleOutput:
+        """The decoder input at the start of decoding.
+
+        Args:
+            batch_size (int).
+
+        Returns:
+            modules.ModuleOutput.
+        """
+        symbol = self._initial_symbol(batch_size)
+        hidden = self._initial_hidden(batch_size)
+        cell = self._initial_cell(batch_size)
+        return modules.ModuleOutput(symbol, hidden, cell)
+
+    def _initial_cell(self, batch_size: int) -> torch.Tensor:
+        """The initial cell state.
+
+        We treat this as a model parameter.
+
+        Args:
+            batch_size (int).
+
+        Returns:
+            torch.Tensor: initial cell state.
+        """
+        return self.c0.repeat(self.decoder_layers, batch_size, 1)
 
     @property
     def name(self) -> str:

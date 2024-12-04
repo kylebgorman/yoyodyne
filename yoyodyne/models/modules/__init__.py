@@ -2,7 +2,7 @@
 
 import argparse
 
-from .base import BaseModule
+from .base import BaseModule, ModuleOutput  # noqa: F401
 from .linear import LinearEncoder
 from .rnn import AttentiveGRUDecoder  # noqa: F401
 from .rnn import AttentiveLSTMDecoder  # noqa: F401
