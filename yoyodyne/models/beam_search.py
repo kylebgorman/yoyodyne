@@ -78,7 +78,7 @@ class Node:
     # find in the module output of a decoder step. Currently that includes the
     # hidden state for RNNs and the cell state for LSTMs in particular, but it
     # would be straightforward to extend this to support models that also pass
-    # embeddings. These fields are all nullable.
+    # embedded data. These fields are all nullable.
     hidden: Optional[torch.Tensor] = dataclasses.field(
         compare=False, default_factory=lambda: None
     )

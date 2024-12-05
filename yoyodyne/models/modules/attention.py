@@ -85,7 +85,7 @@ class Attention(nn.Module):
                 shape B x seq_len.
         """
         # -> B x seq_len x encoder_dim + hidden_dim.
-        concat = torch.cat([encoder_outputs, hidden], 2)
+        concat = torch.cat((encoder_outputs, hidden), 2)
         # V * feed forward with tanh.
         # -> B x seq_len x hidden_size
         m = self.M(concat)

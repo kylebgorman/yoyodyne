@@ -392,7 +392,7 @@ class TransformerDecoderLayerSeparateFeatures(nn.TransformerDecoderLayer):
             )
             # TODO: Do we want a nonlinear activation?
             feature_attention = self.features_linear(feature_attention)
-            x = torch.cat([symbol_attention, feature_attention], dim=2)
+            x = torch.cat((symbol_attention, feature_attention), dim=2)
             x = x + self._ff_block(self.norm3(x))
         else:
             x = self.norm1(
@@ -422,7 +422,7 @@ class TransformerDecoderLayerSeparateFeatures(nn.TransformerDecoderLayer):
             )
             # TODO: Do we want a nonlinear activation?
             feature_attention = self.features_linear(feature_attention)
-            x = x + torch.cat([symbol_attention, feature_attention], dim=2)
+            x = x + torch.cat((symbol_attention, feature_attention), dim=2)
             x = self.norm2(x)
             x = self.norm3(x + self._ff_block(x))
         return x
@@ -551,21 +551,21 @@ class TransformerDecoder(TransformerModule):
         Returns:
             torch.Tensor: torch tensor of decoder outputs.
         """
-        target_embedding = self.embed(target)
-        target_sequence_length = target_embedding.size(1)
+        target_embedded = self.embed(target)
+        target_sequence_length = target_embedded.size(1)
         # -> seq_len x seq_len.
         causal_mask = self.generate_square_subsequent_mask(
             target_sequence_length
         ).to(self.device)
         # -> B x seq_len x d_model.
         output = self.module(
-            target_embedding,
+            target_embedded,
             encoder_hidden,
             tgt_mask=causal_mask,
             memory_key_padding_mask=source_mask,
             tgt_key_padding_mask=target_mask,
         )
-        return base.ModuleOutput(output, embeddings=target_embedding)
+        return base.ModuleOutput(output, embedded=target_embedded)
 
     def get_module(self) -> nn.TransformerDecoder:
         decoder_layer = nn.TransformerDecoderLayer(
@@ -580,7 +580,7 @@ class TransformerDecoder(TransformerModule):
         return nn.TransformerDecoder(
             decoder_layer=decoder_layer,
             num_layers=self.layers,
-            norm=nn.LayerNorm(self.embedding_size),
+            norm=nn.LayerNorm(self.embedded),
         )
 
     @staticmethod
@@ -663,8 +663,8 @@ class TransformerPointerDecoder(TransformerDecoder):
         Returns:
             torch.Tensor: torch tensor of decoder outputs.
         """
-        target_embedding = self.embed(target)
-        target_sequence_length = target_embedding.size(1)
+        target_embedded = self.embed(target)
+        target_sequence_length = target_embedded.size(1)
         # -> seq_len x seq_len.
         causal_mask = self.generate_square_subsequent_mask(
             target_sequence_length
@@ -672,7 +672,7 @@ class TransformerPointerDecoder(TransformerDecoder):
         # -> B x seq_len x d_model.
         if self.separate_features:
             output = self.module(
-                target_embedding,
+                target_embedded,
                 encoder_hidden,
                 features_memory=features_memory,
                 target_mask=causal_mask,
@@ -684,13 +684,13 @@ class TransformerPointerDecoder(TransformerDecoder):
             # TODO: Resolve mismatch between our 'target' naming convention and
             # torch's use of `tgt`.
             output = self.module(
-                target_embedding,
+                target_embedded,
                 encoder_hidden,
                 tgt_mask=causal_mask,
                 memory_key_padding_mask=source_mask,
                 tgt_key_padding_mask=target_mask,
             )
-        return base.ModuleOutput(output, embeddings=target_embedding)
+        return base.ModuleOutput(output, embedded=target_embedded)
 
     def get_module(self) -> nn.TransformerDecoder:
         if self.separate_features:

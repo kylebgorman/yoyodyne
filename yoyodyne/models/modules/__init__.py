@@ -2,23 +2,23 @@
 
 import argparse
 
-from .base import BaseModule, ModuleOutput  # noqa: F401
+from .base import BaseModule  # noqa: F401
+from .base import ModuleOutput  # noqa: F401
+from .hard_attention import ContextHardAttentionGRUDecoder  # noqa: F401
+from .hard_attention import ContextHardAttentionLSTMDecoder  # noqa: F401
+from .hard_attention import HardAttentionGRUDecoder  # noqa: F401
+from .hard_attention import HardAttentionLSTMDecoder  # noqa: F401
+from .hard_attention import HardAttentionModuleOutput  # noqa: F401
 from .linear import LinearEncoder
 from .rnn import AttentiveGRUDecoder  # noqa: F401
 from .rnn import AttentiveLSTMDecoder  # noqa: F401
-from .rnn import ContextHardAttentionGRUDecoder  # noqa: F401
-from .rnn import ContextHardAttentionLSTMDecoder  # noqa: F401
 from .rnn import GRUDecoder  # noqa: F401
 from .rnn import GRUEncoder
-from .rnn import HardAttentionGRUDecoder  # noqa: F401
-from .rnn import HardAttentionLSTMDecoder  # noqa: F401
 from .rnn import LSTMDecoder  # noqa: F401
 from .rnn import LSTMEncoder
 from .transformer import TransformerDecoder  # noqa: F401
-from .transformer import (
-    FeatureInvariantTransformerEncoder,
-    TransformerEncoder,
-)
+from .transformer import FeatureInvariantTransformerEncoder
+from .transformer import TransformerEncoder
 
 
 class Error(Exception):

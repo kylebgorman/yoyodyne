@@ -82,9 +82,8 @@ class RNNModel(base.BaseModel):
         """Decodes with a beam.
 
         Args:
-            encoder_output (torch.Tensor): batch of encoded input symbols.
-            encoder_mask (torch.Tensor): mask for the batch of encoded
-                input symbols.
+            encoder_output (torch.Tensor): batch of encoded source symbols.
+            encoder_mask (torch.Tensor): source symbol mask.
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: predictions and the
@@ -143,9 +142,8 @@ class RNNModel(base.BaseModel):
         specified length depending on the `target` args.
 
         Args:
-            encoder_output (torch.Tensor): batch of encoded input symbols.
-            encoder_mask (torch.Tensor): mask for the batch of encoded input
-                symbols.
+            encoder_output (torch.Tensor): batch of encoded source symbols.
+            encoder_mask (torch.Tensor): source symbol mask.
             teacher_forcing (bool): Whether or not to decode with teacher
                 forcing.
             target (torch.Tensor, optional): target symbols; we decode up to
@@ -194,8 +192,7 @@ class RNNModel(base.BaseModel):
                         decoder_output.output.size(-1) >= target.size(-1)
                     ):
                         break
-        predictions = torch.stack(predictions).transpose(0, 1)
-        return predictions
+        return torch.stack(predictions).transpose(0, 1)
 
     def forward(
         self,
@@ -207,30 +204,26 @@ class RNNModel(base.BaseModel):
             batch (data.PaddedBatch).
 
         Returns:
-            Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]: beam
-                search returns a tuple with a tensor of predictions of shape
-                beam_width x seq_len and tensor with the unnormalized sum
-                of symbol log-probabilities for each prediction. Greedy returns
-                a tensor of predictions of shape
-                seq_len x batch_size x target_vocab_size.
+            Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
+                for beam decoding, a tuple of predictions and unnormalized log
+                likelihoods for each prediction; for greedy decoding, the
+                predictions tensor.
         """
-        encoder_output = self.source_encoder(batch.source)
+        encoder_output = self.source_encoder(batch.source).output
         # This method has a polymorphic return type because beam search needs
         # to return the log-likelihoods too.
         if self.beam_width > 1:
-            predictions, scores = self.beam_decode(
-                encoder_output.output,
+            return self.beam_decode(
+                encoder_output,
                 batch.source.mask,
             )
-            return predictions, scores
         else:
-            predictions = self.greedy_decode(
-                encoder_output.output,
+            return self.greedy_decode(
+                encoder_output,
                 batch.source.mask,
                 self.teacher_forcing if self.training else False,
                 batch.target.padded if batch.target else None,
             )
-            return predictions
 
     @staticmethod
     def add_argparse_args(parser: argparse.ArgumentParser) -> None:
@@ -252,10 +245,12 @@ class RNNModel(base.BaseModel):
             dest="bidirectional",
         )
 
+    # Interface.
+
     def get_decoder(self):
         raise NotImplementedError
 
-    def init_hiddens(self, batch_size: int):
+    def initial_input(self, batch_size: int) -> modules.ModuleOutput:
         raise NotImplementedError
 
     @property

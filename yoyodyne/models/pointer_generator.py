@@ -47,7 +47,7 @@ class GenerationProbability(nn.Module):
     def forward(
         self,
         attention_context: torch.Tensor,
-        decoder_hiddens: torch.Tensor,
+        decoder_hidden: torch.Tensor,
         target_embeddings: torch.Tensor,
     ) -> torch.Tensor:
         """Computes the generation probability
@@ -60,7 +60,7 @@ class GenerationProbability(nn.Module):
             attention_context (torch.Tensor): combined context vector over
                 source and features of shape
                 B x sequence_length x attention_size.
-            decoder_hiddens (torch.Tensor): decoder hidden state of shape
+            decoder_hidden (torch.Tensor): decoder hidden state of shape
                 B x sequence_length x hidden_size.
             target_embeddings (torch.Tensor): decoder input of shape
                 B x sequence_length x embedding_size.
@@ -69,9 +69,7 @@ class GenerationProbability(nn.Module):
             torch.Tensor: generation probability of shape B.
         """
         # -> B x sequence_length x 1.
-        p_gen = self.W_attention(attention_context) + self.W_hs(
-            decoder_hiddens
-        )
+        p_gen = self.W_attention(attention_context) + self.W_hs(decoder_hidden)
         p_gen += self.W_emb(target_embeddings) + self.bias.expand(
             attention_context.size(0), 1, -1
         )
@@ -219,7 +217,7 @@ class PointerGeneratorRNNModel(rnn.RNNModel, PointerGenerator):
         source_enc: torch.Tensor,
         source_mask: torch.Tensor,
         source_indices: torch.Tensor,
-        decoder_hiddens: torch.Tensor,
+        decoder_hidden: torch.Tensor,
         teacher_forcing: bool,
         features_enc: Optional[torch.Tensor] = None,
         features_mask: Optional[torch.Tensor] = None,
@@ -236,7 +234,7 @@ class PointerGeneratorRNNModel(rnn.RNNModel, PointerGenerator):
                 symbols.
             source_indices (torch.Tensor): indices of the input for calculating
                 pointer weights.
-            decoder_hiddens (torch.Tensor).
+            decoder_hidden (torch.Tensor).
             teacher_forcing (bool): whether or not to decode with teacher
                 forcing.
             features_enc (torch.Tensor, optional): batch of encoded feaure
@@ -269,9 +267,9 @@ class PointerGeneratorRNNModel(rnn.RNNModel, PointerGenerator):
         finished = torch.zeros(batch_size, device=self.device)
         for t in range(num_steps):
             # pred: B x 1 x target_vocab_size.
-            output, decoder_hiddens = self.decode_step(
+            output, decoder_hidden = self.decode_step(
                 decoder_input,
-                decoder_hiddens,
+                decoder_hidden,
                 source_indices,
                 source_enc,
                 source_mask,
@@ -306,7 +304,7 @@ class PointerGeneratorRNNModel(rnn.RNNModel, PointerGenerator):
     def decode_step(
         self,
         symbol: torch.Tensor,
-        last_hiddens: Tuple[torch.Tensor, torch.Tensor],
+        last_hidden: Tuple[torch.Tensor, torch.Tensor],
         source_indices: torch.Tensor,
         source_enc: torch.Tensor,
         source_mask: torch.Tensor,
@@ -319,7 +317,7 @@ class PointerGeneratorRNNModel(rnn.RNNModel, PointerGenerator):
 
         Args:
             symbol (torch.Tensor).
-            last_hiddens (Tuple[torch.Tensor, torch.Tensor]).
+            last_hidden (Tuple[torch.Tensor, torch.Tensor]).
             source_indices (torch.Tensor).
             source_enc (torch.Tensor).
             source_mask (torch.Tensor).
@@ -330,7 +328,7 @@ class PointerGeneratorRNNModel(rnn.RNNModel, PointerGenerator):
             Tuple[torch.Tensor, torch.Tensor].
         """
         embedded = self.decoder.embed(symbol)
-        last_h0, last_c0 = last_hiddens
+        last_h0, last_c0 = last_hidden
         source_context, attention_weights = self.decoder.attention(
             last_h0.transpose(0, 1), source_enc, source_mask
         )
@@ -339,7 +337,7 @@ class PointerGeneratorRNNModel(rnn.RNNModel, PointerGenerator):
                 last_h0.transpose(0, 1), features_enc, features_mask
             )
             # -> B x 1 x 4*hidden_size.
-            context = torch.cat([source_context, features_context], dim=2)
+            context = torch.cat((source_context, features_context), dim=2)
         else:
             context = source_context
         _, (h, c) = self.decoder.module(
@@ -347,7 +345,7 @@ class PointerGeneratorRNNModel(rnn.RNNModel, PointerGenerator):
         )
         # -> B x 1 x hidden_size
         hidden = h[-1, :, :].unsqueeze(1)
-        output_dist = self.classifier(torch.cat([hidden, context], dim=2))
+        output_dist = self.classifier(torch.cat((hidden, context), dim=2))
         output_dist = nn.functional.softmax(output_dist, dim=2)
         # -> B x 1 x target_vocab_size.
         ptr_dist = torch.zeros(
@@ -392,7 +390,7 @@ class PointerGeneratorGRUModel(PointerGeneratorRNNModel, rnn.GRUModel):
     def decode_step(
         self,
         symbol: torch.Tensor,
-        last_hiddens: torch.Tensor,
+        last_hidden: torch.Tensor,
         source_indices: torch.Tensor,
         source_enc: torch.Tensor,
         source_mask: torch.Tensor,
@@ -405,7 +403,7 @@ class PointerGeneratorGRUModel(PointerGeneratorRNNModel, rnn.GRUModel):
 
         Args:
             symbol (torch.Tensor).
-            last_hiddens (torch.Tensor).
+            last_hidden (torch.Tensor).
             source_indices (torch.Tensor).
             source_enc (torch.Tensor).
             source_mask (torch.Tensor).
@@ -417,22 +415,22 @@ class PointerGeneratorGRUModel(PointerGeneratorRNNModel, rnn.GRUModel):
         """
         embedded = self.decoder.embed(symbol)
         source_context, attention_weights = self.decoder.attention(
-            last_hiddens.transpose(0, 1), source_enc, source_mask
+            last_hidden.transpose(0, 1), source_enc, source_mask
         )
         if self.has_features_encoder:
             features_context, _ = self.features_attention(
-                last_hiddens.transpose(0, 1), features_enc, features_mask
+                last_hidden.transpose(0, 1), features_enc, features_mask
             )
             # -> B x 1 x 4*hidden_size.
-            context = torch.cat([source_context, features_context], dim=2)
+            context = torch.cat((source_context, features_context), dim=2)
         else:
             context = source_context
         _, h = self.decoder.module(
-            torch.cat((embedded, context), 2), last_hiddens
+            torch.cat((embedded, context), 2), last_hidden
         )
         # -> B x 1 x hidden_size
         hidden = h[-1, :, :].unsqueeze(1)
-        output_dist = self.classifier(torch.cat([hidden, context], dim=2))
+        output_dist = self.classifier(torch.cat((hidden, context), dim=2))
         output_dist = nn.functional.softmax(output_dist, dim=2)
         # -> B x 1 x target_vocab_size.
         ptr_dist = torch.zeros(
@@ -467,14 +465,14 @@ class PointerGeneratorGRUModel(PointerGeneratorRNNModel, rnn.GRUModel):
         """
         encoder_out = self.source_encoder(batch.source)
         source_encoded = encoder_out.output
-        if encoder_out.has_hiddens:
-            last_hiddens = self._reshape_hiddens(
-                encoder_out.hiddens,
+        if encoder_out.has_hidden:
+            last_hidden = self._reshape_hidden(
+                encoder_out.hidden,
                 self.source_encoder.layers,
                 self.source_encoder.num_directions,
             )
         else:
-            last_hiddens = self.init_hiddens(
+            last_hidden = self.init_hidden(
                 len(batch), self.source_encoder.layers
             )
         if not self.has_features_encoder:
@@ -484,7 +482,7 @@ class PointerGeneratorGRUModel(PointerGeneratorRNNModel, rnn.GRUModel):
                     source_encoded,
                     batch.source.mask,
                     batch.source.padded,
-                    last_hiddens,
+                    last_hidden,
                     self.teacher_forcing if self.training else False,
                     target=batch.target.padded if batch.target else None,
                 )
@@ -493,21 +491,21 @@ class PointerGeneratorGRUModel(PointerGeneratorRNNModel, rnn.GRUModel):
                     source_encoded,
                     batch.source.mask,
                     batch.source.padded,
-                    last_hiddens,
+                    last_hidden,
                     self.teacher_forcing if self.training else False,
                     target=batch.target.padded if batch.target else None,
                 )
         else:
             features_encoder_out = self.features_encoder(batch.features)
             features_encoded = features_encoder_out.output
-            if features_encoder_out.has_hiddens:
-                last_hiddens = self._reshape_hiddens(
-                    features_encoder_out.hiddens,
+            if features_encoder_out.has_hidden:
+                last_hidden = self._reshape_hidden(
+                    features_encoder_out.hidden,
                     self.features_encoder.layers,
                     self.features_encoder.num_directions,
                 )
             else:
-                last_hiddens = self.init_hiddens(
+                last_hidden = self.init_hidden(
                     len(batch), self.source_encoder.layers
                 )
             if self.beam_width > 1:
@@ -516,7 +514,7 @@ class PointerGeneratorGRUModel(PointerGeneratorRNNModel, rnn.GRUModel):
                     source_encoded,
                     batch.source.mask,
                     batch.source.padded,
-                    last_hiddens,
+                    last_hidden,
                     self.teacher_forcing if self.training else False,
                     features_enc=features_encoded,
                     features_mask=batch.features.mask,
@@ -527,7 +525,7 @@ class PointerGeneratorGRUModel(PointerGeneratorRNNModel, rnn.GRUModel):
                     source_encoded,
                     batch.source.mask,
                     batch.source.padded,
-                    last_hiddens,
+                    last_hidden,
                     self.teacher_forcing if self.training else False,
                     features_enc=features_encoded,
                     features_mask=batch.features.mask,
@@ -535,7 +533,7 @@ class PointerGeneratorGRUModel(PointerGeneratorRNNModel, rnn.GRUModel):
                 )
 
     @staticmethod
-    def _reshape_hiddens(
+    def _reshape_hidden(
         h: torch.Tensor,
         layers: int,
         num_directions: int,
@@ -576,7 +574,7 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
     def decode_step(
         self,
         symbol: torch.Tensor,
-        last_hiddens: Tuple[torch.Tensor, torch.Tensor],
+        last_hidden: Tuple[torch.Tensor, torch.Tensor],
         source_indices: torch.Tensor,
         source_enc: torch.Tensor,
         source_mask: torch.Tensor,
@@ -589,7 +587,7 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
 
         Args:
             symbol (torch.Tensor).
-            last_hiddens (Tuple[torch.Tensor, torch.Tensor]).
+            last_hidden (Tuple[torch.Tensor, torch.Tensor]).
             source_indices (torch.Tensor).
             source_enc (torch.Tensor).
             source_mask (torch.Tensor).
@@ -600,7 +598,7 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
             Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]].
         """
         embedded = self.decoder.embed(symbol)
-        last_h0, last_c0 = last_hiddens
+        last_h0, last_c0 = last_hidden
         source_context, attention_weights = self.decoder.attention(
             last_h0.transpose(0, 1), source_enc, source_mask
         )
@@ -609,7 +607,7 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
                 last_h0.transpose(0, 1), features_enc, features_mask
             )
             # -> B x 1 x 4*hidden_size.
-            context = torch.cat([source_context, features_context], dim=2)
+            context = torch.cat((source_context, features_context), dim=2)
         else:
             context = source_context
         _, (h, c) = self.decoder.module(
@@ -617,7 +615,7 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
         )
         # -> B x 1 x hidden_size
         hidden = h[-1, :, :].unsqueeze(1)
-        output_dist = self.classifier(torch.cat([hidden, context], dim=2))
+        output_dist = self.classifier(torch.cat((hidden, context), dim=2))
         output_dist = nn.functional.softmax(output_dist, dim=2)
         # -> B x 1 x target_vocab_size.
         ptr_dist = torch.zeros(
@@ -652,16 +650,16 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
         """
         encoder_out = self.source_encoder(batch.source)
         source_encoded = encoder_out.output
-        if encoder_out.has_hiddens:
-            h_source, c_source = encoder_out.hiddens
-            last_hiddens = self._reshape_hiddens(
+        if encoder_out.has_hidden:
+            h_source, c_source = encoder_out.hidden
+            last_hidden = self._reshape_hidden(
                 h_source,
                 c_source,
                 self.source_encoder.layers,
                 self.source_encoder.num_directions,
             )
         else:
-            last_hiddens = self.init_hiddens(len(batch))
+            last_hidden = self.init_hidden(len(batch))
         if not self.has_features_encoder:
             if self.beam_width > 1:
                 # Will raise a NotImplementedError.
@@ -669,7 +667,7 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
                     source_encoded,
                     batch.source.mask,
                     batch.source.padded,
-                    last_hiddens,
+                    last_hidden,
                     self.teacher_forcing if self.training else False,
                     target=batch.target.padded if batch.target else None,
                 )
@@ -678,30 +676,30 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
                     source_encoded,
                     batch.source.mask,
                     batch.source.padded,
-                    last_hiddens,
+                    last_hidden,
                     self.teacher_forcing if self.training else False,
                     target=batch.target.padded if batch.target else None,
                 )
         else:
             features_encoder_out = self.features_encoder(batch.features)
             features_encoded = features_encoder_out.output
-            if features_encoder_out.has_hiddens:
-                h_features, c_features = features_encoder_out.hiddens
-                h_features, c_features = self._reshape_hiddens(
+            if features_encoder_out.has_hidden:
+                h_features, c_features = features_encoder_out.hidden
+                h_features, c_features = self._reshape_hidden(
                     h_features,
                     c_features,
                     self.features_encoder.layers,
                     self.features_encoder.num_directions,
                 )
             else:
-                h_features, c_features = self.init_hiddens(len(batch))
+                h_features, c_features = self.init_hidden(len(batch))
             if self.beam_width > 1:
                 # Will raise a NotImplementedError.
                 return self.beam_decode(
                     source_encoded,
                     batch.source.mask,
                     batch.source.padded,
-                    last_hiddens,
+                    last_hidden,
                     self.teacher_forcing if self.training else False,
                     features_enc=features_encoded,
                     features_mask=batch.features.mask,
@@ -712,7 +710,7 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
                     source_encoded,
                     batch.source.mask,
                     batch.source.padded,
-                    last_hiddens,
+                    last_hidden,
                     self.teacher_forcing if self.training else False,
                     features_enc=features_encoded,
                     features_mask=batch.features.mask,
@@ -720,7 +718,7 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel, rnn.LSTMModel):
                 )
 
     @staticmethod
-    def _reshape_hiddens(
+    def _reshape_hidden(
         h: torch.Tensor,
         c: torch.Tensor,
         layers: int,

@@ -18,7 +18,7 @@ class ModuleOutput(nn.Module):
     output: torch.Tensor
     hidden: Optional[torch.Tensor]  # For RNNs.
     cell: Optional[torch.Tensor]  # For LSTMs in particular.
-    embedded: Optional[torch.Tensor]
+    embedded: Optional[torch.Tensor]  #
 
     def __init__(self, output, hidden=None, cell=None, embedded=None):
         super().__init__()
@@ -31,13 +31,7 @@ class ModuleOutput(nn.Module):
     def has_hidden(self) -> bool:
         return self.hidden is not None
 
-    @property
-    def has_cell(self) -> bool:
-        return self.cell is not None
-
-    @property
-    def has_embedded(self) -> bool:
-        return self.embedded is not None
+    # `has_cell`, etc. can be defined but currently: YAGNI.
 
 
 class BaseModule(lightning.LightningModule):
