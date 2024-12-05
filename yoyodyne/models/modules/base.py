@@ -1,6 +1,5 @@
 """Base module class with PL integration."""
 
-import dataclasses
 from typing import Optional
 
 import lightning
@@ -10,14 +9,23 @@ from torch import nn
 from ... import defaults
 
 
-@dataclasses.dataclass
-class ModuleOutput:
-    """Output for forward passes."""
+class ModuleOutput(nn.Module):
+    """Output for forward passes.
+
+    Other than the output tensor itself, all the other fields are nullable and
+    can be omitted safely."""
 
     output: torch.Tensor
-    hidden: Optional[torch.Tensor] = None  # For RNNs.
-    cell: Optional[torch.Tensor] = None  # For LSTMs in particular.
-    embeddings: Optional[torch.Tensor] = None
+    hidden: Optional[torch.Tensor]  # For RNNs.
+    cell: Optional[torch.Tensor]  # For LSTMs in particular.
+    embedded: Optional[torch.Tensor]
+
+    def __init__(self, output, hidden=None, cell=None, embedded=None):
+        super().__init__()
+        self.register_buffer("output", output)
+        self.register_buffer("hidden", hidden)
+        self.register_buffer("cell", cell)
+        self.register_buffer("embedded", embedded)
 
     @property
     def has_hidden(self) -> bool:
@@ -28,8 +36,8 @@ class ModuleOutput:
         return self.cell is not None
 
     @property
-    def has_embeddings(self) -> bool:
-        return self.embeddings is not None
+    def has_embedded(self) -> bool:
+        return self.embedded is not None
 
 
 class BaseModule(lightning.LightningModule):

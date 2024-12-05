@@ -74,132 +74,61 @@ class RNNModel(base.BaseModel):
         """
         return self.h0.repeat(self.decoder_layers, batch_size, 1)
 
-    '''
     def beam_decode(
         self,
         encoder_output: torch.Tensor,
         encoder_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Overrides `beam_decode` in `BaseEncoderDecoder`.
+        """Decodes with a beam.
 
-        This method implements the LSTM-specific beam search version. Note
-        that we assume batch size is 1.
+        Args:
+            encoder_output (torch.Tensor): batch of encoded input symbols.
+            encoder_mask (torch.Tensor): mask for the batch of encoded
+                input symbols.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: predictions and the
+                associated log-likelihoods.
         """
-        # TODO: modify to work with batches larger than 1.
+        # This currently assumes batch size is 1.
         batch_size = encoder_mask.shape[0]
-        if batch_size != 1:
-            raise NotImplementedError(
-                "Beam search is not implemented for batch_size > 1"
-            )
-        # Initializes hidden states for decoder LSTM.
-        decoder_hiddens = self.init_hiddens(batch_size)
-        # Log likelihood, last decoded idx, all likelihoods,  hiddens tensor.
-        histories = [[0.0, [special.START_IDX], [0.0], decoder_hiddens]]
+        # Misleadingly named to abuse the GC.
+        decoder_output = self.initial_input(batch_size)
+        beam = beam_search.Beam.from_initial_input(decoder_output)
         for t in range(self.max_target_length):
-            # List that stores the heap of the top beam_width elements from all
-            # beam_width x target_vocab_size possibilities
-            likelihoods = []
-            hypotheses = []
-            # First accumulates all beam_width predictions.
-            for (
-                beam_likelihood,
-                beam_idxs,
-                char_likelihoods,
-                decoder_hiddens,
-            ) in histories:
-                # Does not keep decoding a path that has hit END.
-                if len(beam_idxs) > 1 and beam_idxs[-1] == special.END_IDX:
-                    fields = [
-                        beam_likelihood,
-                        beam_idxs,
-                        char_likelihoods,
-                        decoder_hiddens,
-                    ]
-                    # TODO: Replace heapq with torch.max or similar?
-                    heapq.heappush(hypotheses, fields)
-                    continue
-                # Feeds in the first decoder input, as a start tag.
-                # -> batch_size x 1
-                decoder_input = torch.tensor(
-                    [beam_idxs[-1]],
-                    device=self.device,
-                ).unsqueeze(1)
-                decoded = self.decoder(
-                    decoder_input, decoder_hiddens, encoder_out, encoder_mask
-                )
-                logits = self.classifier(decoded.output)
-                likelihoods.append(
-                    (
-                        logits,
-                        beam_likelihood,
-                        beam_idxs,
-                        char_likelihoods,
-                        decoded.hiddens,
+            with beam_search.BeamHelper(self.beam_width) as helper:
+                for node in beam.nodes:
+                    # Misleadingly named to abuse the GC.
+                    decoder_output = node.decoder_input().to(self.device)
+                    decoder_output = self.decoder(
+                        decoder_output, encoder_output, encoder_mask
                     )
-                )
-            # Constrains the next step to beamsize.
-            for (
-                logits,
-                beam_loglikelihood,
-                beam_idxs,
-                char_loglikelihoods,
-                decoder_hiddens,
-            ) in likelihoods:
-                # This is 1 x 1 x target_vocab_size since we fixed batch size
-                # to 1. We squeeze off the first 2 dimensions to get a tensor
-                # of target_vocab_size.
-                logits = logits.squeeze((0, 1))
-                # Obtain the log-probabilities of the logits.
-                predictions = nn.functional.log_softmax(logits, dim=0).cpu()
-                for j, logprob in enumerate(predictions):
-                    cl = char_loglikelihoods + [logprob]
-                    if len(hypotheses) < self.beam_width:
-                        fields = [
-                            beam_loglikelihood + logprob,
-                            beam_idxs + [j],
-                            cl,
-                            decoder_hiddens,
-                        ]
-                        heapq.heappush(hypotheses, fields)
-                    else:
-                        fields = [
-                            beam_loglikelihood + logprob,
-                            beam_idxs + [j],
-                            cl,
-                            decoder_hiddens,
-                        ]
-                        heapq.heappushpop(hypotheses, fields)
-            # Sorts hypotheses and reverse to have the min log_likelihood at
-            # first index. We think that this is faster than heapq.nlargest().
-            hypotheses.sort(reverse=True)
-            # It not necessary to make a deep copy beacuse hypotheses is going
-            # to be defined again at the start of the loop.
-            histories = hypotheses
-            # If the top n hypotheses are full sequences, break.
-            if all([h[1][-1] == special.END_IDX for h in histories]):
+                    # Overwrites the raw decoder outputs with logits, needed
+                    # to generate next-symbol predictions.
+                    decoder_output.output = self.classifier(
+                        decoder_output.output
+                    ).squeeze((0, 1))
+                    helper.record(node, decoder_output)
+            beam = helper.beam()
+            if beam.is_final:
                 break
-        # Sometimes path lengths does not match so it is neccesary to pad it
-        # all to same length to create a tensor.
-        max_len = max(len(h[1]) for h in histories)
-        predictions = torch.tensor(
-            [
-                h[1] + [special.PAD_IDX] * (max_len - len(h[1]))
-                for h in histories
-            ],
-            device=self.device,
+        # --> B x beam_width x seq_length.
+        predictions = (
+            nn.utils.rnn.pad_sequence(
+                [
+                    torch.tensor(cell.symbols, device=self.device)
+                    for cell in beam.nodes
+                ],
+                padding_value=special.PAD_IDX,
+            )
+            .unsqueeze(0)
+            .transpose(1, 2)
         )
-        # Converts shape to that of `decode`: seq_len x B x target_vocab_size.
-        predictions = predictions.unsqueeze(0).transpose(0, 2)
-        # Beam search returns the likelihoods of each history.
-        return predictions, torch.tensor([h[0] for h in histories])
-    '''
-
-    def beam_decode(
-        self,
-        encoder_output: torch.Tensor,
-        encoder_mask: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        raise NotImplementedError("working on this")
+        loglikes = torch.tensor(
+            [cell.loglike for cell in beam.nodes],
+            device=self.device,
+        ).unsqueeze(0)
+        return predictions, loglikes
 
     def greedy_decode(
         self,
@@ -215,12 +144,12 @@ class RNNModel(base.BaseModel):
 
         Args:
             encoder_output (torch.Tensor): batch of encoded input symbols.
-            encoder_mask (torch.Tensor): mask for the batch of encoded
-                input symbols.
-            teacher_forcing (bool): Whether or not to decode
-                with teacher forcing.
-            target (torch.Tensor, optional): target symbols;  we
-                decode up to `len(target)` symbols. If None, we decode up to
+            encoder_mask (torch.Tensor): mask for the batch of encoded input
+                symbols.
+            teacher_forcing (bool): Whether or not to decode with teacher
+                forcing.
+            target (torch.Tensor, optional): target symbols; we decode up to
+                `len(target)` symbols. If omitted, we decode up to
                 `self.max_target_length` symbols.
 
         Returns:
@@ -228,12 +157,10 @@ class RNNModel(base.BaseModel):
                 batch_size x target_vocab_size.
         """
         batch_size = encoder_mask.shape[0]
-        # Misleadingly named beacuse we only need to keep track of what is
-        # output from the previous step; we don't need copies of both input
-        # and output at any point.
+        # Misleadingly named to abuse the GC.
         decoder_output = self.initial_input(batch_size)
         predictions = []
-        num_steps = (
+        max_target_length = (
             target.size(1) if target is not None else self.max_target_length
         )
         # Tracks when each sequence has decoded an END; not needed when using
@@ -243,7 +170,7 @@ class RNNModel(base.BaseModel):
             if teacher_forcing
             else torch.zeros(batch_size, dtype=torch.bool, device=self.device)
         )
-        for t in range(num_steps):
+        for t in range(max_target_length):
             decoder_output = self.decoder(
                 decoder_output, encoder_output, encoder_mask
             )
@@ -267,32 +194,8 @@ class RNNModel(base.BaseModel):
                         decoder_output.output.size(-1) >= target.size(-1)
                     ):
                         break
-        predictions = torch.stack(predictions)
+        predictions = torch.stack(predictions).transpose(0, 1)
         return predictions
-
-    '''
-    def decode_step(
-        self,
-        decoder_input: modules.ModuleOutput,
-        encoder_output: torch.Tensor,
-        encoder_mask: torch.Tensor,
-    ) -> modules.ModuleOutput:
-        """Decodes a single symbol.
-
-        Args:
-            decoder_input (modules.ModuleOutput).
-            encoder_output (torch.Tensor).
-            encoder_mask (torch.Tensor).
-
-        Returns:
-            modules.ModuleOutput.
-        """
-        decoder_output = self.decoder(
-            decoder_input, encoder_output, encoder_mask
-        )
-        decoder_output.output = self.classifier(decoder_output.output)
-        return decoder_output
-    '''
 
     def forward(
         self,
@@ -319,8 +222,6 @@ class RNNModel(base.BaseModel):
                 encoder_output.output,
                 batch.source.mask,
             )
-            # -> beam_width x seq_len.
-            predictions = predictions.transpose(0, 2).squeeze(0)
             return predictions, scores
         else:
             predictions = self.greedy_decode(
@@ -329,8 +230,6 @@ class RNNModel(base.BaseModel):
                 self.teacher_forcing if self.training else False,
                 batch.target.padded if batch.target else None,
             )
-            # -> B x seq_len x target_vocab_size.
-            predictions = predictions.transpose(0, 1)
             return predictions
 
     @staticmethod

@@ -102,19 +102,20 @@ def predict(
         if model.beam_width > 1:
             # Beam search.
             tsv_writer = csv.writer(sink, delimiter="\t")
-            for predictions, scores in trainer.predict(model, loader):
+            for predictions, loglikes in trainer.predict(model, loader):
                 predictions = util.pad_tensor_after_end(predictions)
-                # TODO: beam search requires singleton batches and this
-                # assumes that. Revise if that restriction is ever lifted.
-                targets = [
-                    parser.target_string(mapper.decode_target(target))
-                    for target in predictions
-                ]
-                # Collates target strings and their scores.
-                row = itertools.chain.from_iterable(
-                    zip(targets, scores.tolist())
-                )
-                tsv_writer.writerow(row)
+                # Even though beam search currently assumes batch size of 1,
+                # prediction does not presume that.
+                for targets, loglike in zip(predictions, loglikes):
+                    target_strings = [
+                        parser.target_string(mapper.decode_target(target))
+                        for target in targets
+                    ]
+                    # Collates target strings and their log-likelihoods.
+                    row = itertools.chain.from_iterable(
+                        zip(target_strings, loglike.tolist())
+                    )
+                    tsv_writer.writerow(row)
         else:
             # Greedy search.
             for predictions in trainer.predict(model, loader):

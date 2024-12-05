@@ -94,12 +94,13 @@ def pad_tensor_after_end(
         symbols, *_ = torch.split(prediction, end)
         # Replaces everything after with PAD, to replace erroneous decoding
         # While waiting on the entire batch to finish.
-        pads = (
-            torch.ones(len(prediction) - len(symbols), device=symbols.device)
-            * special.PAD_IDX
+        pads = torch.full(
+            (len(prediction) - len(symbols),),
+            special.PAD_IDX,
+            device=predictions.device,
         )
         pads[0] = special.END_IDX
         # Makes an in-place update to an inference tensor.
         with torch.inference_mode():
-            predictions[i] = torch.cat((symbols, pads))
+            predictions[i, end:] = pads
     return predictions
