@@ -40,6 +40,14 @@ class TransformerModel(base.BaseModel):
             self.embedding_size, self.target_vocab_size
         )
 
+    # Properties.
+
+    @property
+    def name(self) -> str:
+        return "transformer"
+
+    # Implemented interface.
+
     def init_embeddings(
         self, num_embeddings: int, embedding_size: int
     ) -> nn.Embedding:
@@ -76,14 +84,14 @@ class TransformerModel(base.BaseModel):
         self,
         encoder_hidden: torch.Tensor,
         source_mask: torch.Tensor,
-        targets: Optional[torch.Tensor],
+        target: Optional[torch.Tensor],
     ) -> torch.Tensor:
         """Decodes the output sequence greedily.
 
         Args:
-            encoder_hidden (torch.Tensor): hidden states from the encoder.
-            source_mask (torch.Tensor): mask for the encoded source tokens.
-            targets (torch.Tensor, optional): the optional target tokens,
+            encoder_hidden (torch.Tensor): encoder hidden state.
+            source_mask (torch.Tensor): source symbol mask.
+            target (torch.Tensor, optional): the optional target tokens,
                 which is only used for early stopping during validation
                 if the decoder has predicted END for every sequence in
                 the batch.
@@ -118,8 +126,8 @@ class TransformerModel(base.BaseModel):
             last_output = logits[:, -1, :]  # Ignores END.
             outputs.append(last_output)
             # -> B x 1 x 1
-            _, pred = torch.max(last_output, dim=1)
-            predictions.append(pred)
+            prediction = torch.argmax(last_output, dim=1)
+            predictions.append(prediction)
             # Updates to track which sequences have decoded an END.
             finished = torch.logical_or(
                 finished, (predictions[-1] == special.END_IDX)
@@ -129,7 +137,7 @@ class TransformerModel(base.BaseModel):
             # we have decoded at least the the same number of steps as the
             # target length.
             if finished.all():
-                if targets is None or len(outputs) >= targets.size(-1):
+                if target is None or len(outputs) >= target.size(-1):
                     break
         # -> B x seq_len x target_vocab_size.
         return torch.stack(outputs).transpose(0, 1)
@@ -189,9 +197,7 @@ class TransformerModel(base.BaseModel):
                     batch.target.padded if batch.target else None,
                 )
 
-    @property
-    def name(self) -> str:
-        return "transformer"
+    # Flags.
 
     @staticmethod
     def add_argparse_args(parser: argparse.ArgumentParser) -> None:

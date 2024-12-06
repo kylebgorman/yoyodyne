@@ -580,7 +580,7 @@ class TransformerDecoder(TransformerModule):
         return nn.TransformerDecoder(
             decoder_layer=decoder_layer,
             num_layers=self.layers,
-            norm=nn.LayerNorm(self.embedded),
+            norm=nn.LayerNorm(self.embedding_size),
         )
 
     @staticmethod

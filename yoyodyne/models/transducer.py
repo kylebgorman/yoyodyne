@@ -44,12 +44,124 @@ class TransducerRNNModel(rnn.RNNModel):
             **kwargs: passed to superclass.
         """
         super().__init__(*args, **kwargs)
-        # Model specific variables.
-        self.vocab_offset = self.vocab_size - self.target_vocab_size
-        self.expert = expert  # Oracle to train model.
-        self.actions = self.expert.actions
-        self.substitutions = self.actions.substitutions
-        self.insertions = self.actions.insertions
+        self.expert = expert
+
+    # Properties.
+
+    @property
+    def decoder_input_size(self) -> int:
+        if self.has_features_encoder:
+            return (
+                self.source_encoder.output_size
+                + self.features_encoder.output_size
+            )
+        else:
+            return self.source_encoder.output_size
+
+    @property
+    def beg_idx(self) -> int:
+        return self.expert.actions.beg_idx
+
+    @property
+    def copy_idx(self) -> int:
+        return self.expert.actions.copy_idx
+
+    @property
+    def del_idx(self) -> int:
+        return self.expert.actions.del_idx
+
+    @property
+    def end_idx(self) -> int:
+        return self.expert.actions.end_idx
+
+    @property
+    def insertions(self) -> List[Tuple[int, actions.ConditionalEdit]]:
+        return self.expert.actions.insertions
+
+    @property
+    def substitutions(self) -> List[Tuple[int, actions.ConditionalEdit]]:
+        return self.expert.actions.substitutions
+
+    @property
+    def vocab_offset(self) -> int:
+        return self.vocab_size - self.target_vocab_size
+
+    # Implemented interface.
+
+    def forward(
+        self,
+        batch: data.PaddedBatch,
+    ) -> Tuple[List[List[int]], torch.Tensor]:
+        """Runs the encoder-decoder model.
+
+        Args:
+            batch (data.PaddedBatch).
+
+        Returns:
+            Tuple[List[List[int]], torch.Tensor]: encoded prediction values
+                and loss tensor; due to transducer setup, prediction is
+                performed during training, so these are returned.
+        """
+        encoder_output = self.source_encoder(batch.source).output
+        # Ignores start symbol.
+        encoder_output = encoder_output[:, 1:, :]
+        source = batch.source.padded[:, 1:]
+        source_mask = batch.source.mask[:, 1:]
+        if self.has_features_encoder:
+            encoder_output = self._combine_source_and_features_encoder_output(
+                encoder_output,
+                self.features_encoder(batch.features).output,
+            )
+        if self.beam_width > 1:
+            # Will raise a NotImplementedError.
+            return self.beam_decode(
+                encoder_output,
+                source,
+                source_mask,
+                teacher_forcing=(
+                    self.teacher_forcing if self.training else False
+                ),
+                target=batch.target.padded if batch.target else None,
+                target_mask=batch.target.mask if batch.target else None,
+            )
+        else:
+            return self.greedy_decode(
+                encoder_output,
+                source,
+                source_mask,
+                teacher_forcing=(
+                    self.teacher_forcing if self.training else False
+                ),
+                target=batch.target.padded if batch.target else None,
+                target_mask=batch.target.mask if batch.target else None,
+            )
+
+    def _combine_source_and_features_encoder_output(
+        self,
+        source_encoder_output: torch.Tensor,
+        features_encoder_output: torch.Tensor,
+    ) -> torch.Tensor:
+        """Combines source and features encodings.
+
+        Args:
+            source_encoder_output (torch.Tensor),
+            features_encoder_output (torch.Tensor),
+
+        Returns:
+            torch.Tensor.
+        """
+        features_encoder_output = features_encoder_output.mean(
+            dim=1, keepdim=True
+        )
+        return torch.cat(
+            (
+                source_encoder_output,
+                features_encoder_output.expand(
+                    -1, source_encoder_output.shape[1], -1
+                ),
+            ),
+            dim=2,
+        )
 
     def beam_decode(self, *args, **kwargs):
         """Overrides incompatible implementation inherited from RNNModel."""
@@ -59,9 +171,8 @@ class TransducerRNNModel(rnn.RNNModel):
 
     def greedy_decode(
         self,
-        encoder_out: torch.Tensor,
-        last_hiddens: Tuple[torch.Tensor, torch.Tensor],
-        source: torch.Tensor,
+        encoder_output: torch.Tensor,
+        source,
         source_mask: torch.Tensor,
         teacher_forcing: bool,
         target: Optional[torch.Tensor] = None,
@@ -72,39 +183,34 @@ class TransducerRNNModel(rnn.RNNModel):
         This essentially serves as a wrapper for looping decode_step.
 
         Args:
-            encoder_out (torch.Tensor): input symbols of shape
-                B x seq_len x emb_size.
-            source (torch.Tensor): encoded source input.
-            source_mask (torch.Tensor): mask for source input.
-            teacher_forcing (bool): whether or not to decode
-                with teacher forcing; determines whether or not to rollout
-                optimal actions.
-            target (torch.Tensor, optional): encoded target input.
-            target_mask (torch.Tensor, optional): mask for target input.
+            encoder_output (torch.Tensor): encoded source symbols.
+            source (torch.Tensor): source symbols.
+            source_mask (torch.Tensor): source symbol mask.
+            teacher_forcing (bool): whether or not to decode with teacher
+                forcing; determines whether or not to roll out optimal actions.
+            target (torch.Tensor, optional): target symbols.
+            target_mask (torch.Tensor, optional): target symbol mask.
 
         Returns:
             Tuple[List[List[int]], torch.Tensor]: encoded prediction values
                 and loss tensor; due to transducer setup, prediction is
                 performed during training, so these are returned.
         """
-        batch_size = source_mask.size(dim=0)
-        input_length = (~source_mask).sum(dim=1)
-        # Initializing values.
+        batch_size = source_mask.shape[0]
+        source_length = (~source_mask).sum(dim=1)
         alignment = torch.zeros(
             batch_size, device=self.device, dtype=torch.int64
         )
-        action_count = torch.zeros(
-            batch_size, device=self.device, dtype=torch.int64
-        )
+        action_count = torch.zeros_like(alignment)
         last_action = torch.full(
-            (batch_size,), self.actions.beg_idx, device=self.device
+            (batch_size,), self.beg_idx, device=self.device
         )
         loss = torch.zeros(batch_size, device=self.device)
-        prediction = [[] for _ in range(batch_size)]
+        predictions = [[] for _ in range(batch_size)]
         # Converting encodings for prediction.
         if target is not None:
             # Target and source need to be integers for SED values.
-            # Clips EOW (idx = -1) for source and target.
+            # Clips END and PAD from source and target.
             source = [
                 s[~smask].tolist()[:-1]
                 for s, smask in zip(source, source_mask)
@@ -113,68 +219,70 @@ class TransducerRNNModel(rnn.RNNModel):
                 t[~tmask].tolist()[:-1]
                 for t, tmask in zip(target, target_mask)
             ]
+        # Misleadingly named to abuse the GC.
+        decoder_output = self.initial_input(batch_size)
         for _ in range(self.max_target_length):
             # Checks if completed all sequences.
-            not_complete = last_action != self.actions.end_idx
-            if not any(not_complete):
+            not_complete = last_action != self.end_idx
+            if not not_complete.any():
+                # I.e., if all are complete.
                 break
             # Proceeds to make new edit; new action for all current decoding.
             action_count = torch.where(
-                not_complete.to(self.device),
+                not_complete,
                 action_count + 1,
                 action_count,
             )
-            # Decoding.
             # We offset the action idx by the symbol vocab size so that we
             # can index into the shared embeddings matrix.
+            decoder_output.output = (
+                last_action.unsqueeze(1) + self.vocab_offset
+            )
             decoder_output = self.decoder(
-                last_action.unsqueeze(dim=1) + self.vocab_offset,
-                last_hiddens,
-                encoder_out,
+                decoder_output,
+                encoder_output,
                 # Accomodates RNNDecoder; see encoder_mask behavior.
                 ~(alignment.unsqueeze(1) + 1),
             )
-            decoded, last_hiddens = (
-                decoder_output.output,
-                decoder_output.hiddens,
-            )
-            logits = self.classifier(decoded).squeeze(dim=1)
+            logits = self.classifier(decoder_output.output).squeeze(1)
             # If given targets, asks expert for optimal actions.
-            optim_actions = (
-                self.batch_expert_rollout(
+            optimal_actions = (
+                self._batch_expert_rollout(
                     source,
                     target,
                     alignment,
-                    prediction,
+                    predictions,
                     not_complete,
                 )
                 if target is not None
                 else None
             )
-            last_action = self.decode_action_step(
+            last_action = self._decode_action_step(
                 logits,
                 alignment,
-                input_length,
+                source_length,
                 not_complete,
-                optim_actions=(optim_actions if teacher_forcing else None),
+                optimal_actions if teacher_forcing else None,
             )
-            alignment = self.update_prediction(
-                last_action, source, alignment, prediction
+            alignment = self._update_prediction(
+                last_action, source, alignment, predictions
             )
             # If target, validation or training step loss required.
             if target is not None:
-                log_sum_loss = self.log_sum_softmax_loss(logits, optim_actions)
+                log_sum_loss = self._log_sum_softmax_loss(
+                    logits, optimal_actions
+                )
                 loss = torch.where(not_complete, log_sum_loss + loss, loss)
-        avg_loss = torch.mean(loss / action_count)
-        return prediction, -avg_loss
+        loss = -torch.mean(loss / action_count)
+        return predictions, loss
 
-    def decode_action_step(
+    def _decode_action_step(
         self,
         logits: torch.Tensor,
         alignment: torch.Tensor,
         input_length: torch.Tensor,
         not_complete: torch.Tensor,
-        optim_actions: Optional[torch.Tensor] = None,
+        optimal_actions: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Decodes logits to find edit action.
 
@@ -189,7 +297,7 @@ class TransducerRNNModel(rnn.RNNModel):
             input_length (torch.Tensor): length of each item in batch.
             not_complete (torch.Tensor): boolean values designating which items
                 have not terminated edits.
-            optim_actions (List[List[int]], optional): optimal actions
+            optimal_actions (List[List[int]], optional): optimal actions
                 determined by expert, present when loss is being calculated.
 
         Returns:
@@ -198,14 +306,14 @@ class TransducerRNNModel(rnn.RNNModel):
         # Finds valid actions given remaining input length.
         end_of_input = (input_length - alignment) <= 1  # 1 -> Last char.
         valid_actions = [
-            (self.compute_valid_actions(eoi) if nc else [self.actions.end_idx])
+            (self._compute_valid_actions(eoi) if nc else [self.end_idx])
             for eoi, nc in zip(end_of_input, not_complete)
         ]
         # Masks invalid actions.
-        logits = self.action_probability_mask(logits, valid_actions)
-        return self.choose_action(logits, not_complete, optim_actions)
+        logits = self._action_probability_mask(logits, valid_actions)
+        return self._choose_action(logits, not_complete, optimal_actions)
 
-    def compute_valid_actions(self, end_of_input: bool) -> List[int]:
+    def _compute_valid_actions(self, end_of_input: bool) -> List[int]:
         """Gives all possible actions for remaining length of edits.
 
         Args:
@@ -215,31 +323,30 @@ class TransducerRNNModel(rnn.RNNModel):
         Returns:
             List[actions.Edit]: actions known by transducer.
         """
-        valid_actions = [self.actions.end_idx]
+        valid_actions = [self.end_idx]
         valid_actions.extend(self.insertions)
         if not end_of_input:
-            valid_actions.extend([self.actions.copy_idx, self.actions.del_idx])
+            valid_actions.append(self.copy_idx)
+            valid_actions.append(self.del_idx)
             valid_actions.extend(self.substitutions)
         return valid_actions
 
-    def action_probability_mask(
+    def _action_probability_mask(
         self, logits: torch.Tensor, valid_actions: List[int]
     ) -> torch.Tensor:
         """Masks non-valid actions in logits."""
         with torch.no_grad():
-            mask = torch.full(
-                logits.shape, defaults.NEG_INF, device=self.device
-            )
+            mask = torch.full_like(logits, defaults.NEG_INF)
             for row, action in zip(mask, valid_actions):
                 row[action] = 0.0
             logits = mask + logits
         return logits
 
-    def choose_action(
+    def _choose_action(
         self,
         logits: torch.Tensor,
         not_complete: torch.Tensor,
-        optim_actions: Optional[List[List[int]]] = None,
+        optimal_actions: Optional[List[List[int]]] = None,
     ) -> torch.Tensor:
         """Chooses transducer action from log_prob distribution.
 
@@ -249,18 +356,18 @@ class TransducerRNNModel(rnn.RNNModel):
             log_probs (torch.Tensor): probability distribution of actions.
             not_complete (torch.Tensor): boolean tensor of batch length to
                 indicate if each item in batch is complete.
-            optim_actions (Optional[List[List[int]]]): optional encoded actions
-                to use for action selection.
+            optimal_actions (Optional[List[List[int]]]): optional encoded
+                actions to use for action selection.
 
         Returns:
             torch.Tensor: action encodings.
         """
         # TODO: Merge logic into PyTorch methods.
         log_probs = nn.functional.log_softmax(logits, dim=1)
-        if optim_actions is None:
+        if optimal_actions is None:
             # Argmax decoding.
             next_action = [
-                (torch.argmax(probs, dim=0) if nc else self.actions.end_idx)
+                (torch.argmax(probs, dim=0) if nc else self.end_idx)
                 for probs, nc in zip(log_probs, not_complete)
             ]
         else:
@@ -269,26 +376,27 @@ class TransducerRNNModel(rnn.RNNModel):
                 if self.expert.explore():
                     # Action is picked by random exploration.
                     next_action = [
-                        (self.sample(probs) if nc else self.actions.end_idx)
+                        (self._sample(probs) if nc else self.end_idx)
                         for probs, nc in zip(log_probs, not_complete)
                     ]
                 else:
-                    # Action is picked from optim_actions.
+                    # Action is picked from optimal_actions.
                     next_action = []
                     for action, probs, nc in zip(
-                        optim_actions, log_probs, not_complete
+                        optimal_actions, log_probs, not_complete
                     ):
                         if nc:
-                            optim_logs = probs[action]
-                            idx = int(torch.argmax(optim_logs, 0))
+                            optimal_logs = probs[action]
+                            idx = torch.argmax(optimal_logs, dim=0).item()
                             next_action.append(action[idx])
                         else:  # Already complete, so skip.
-                            next_action.append(self.actions.end_idx)
-        return torch.tensor(next_action, device=self.device, dtype=torch.int)
+                            next_action.append(self.end_idx)
+        return torch.tensor(next_action, device=self.device)
 
     # TODO: Merge action classes to remove need for this method.
+
     @staticmethod
-    def remap_actions(
+    def _remap_actions(
         action_scores: Dict[actions.Edit, float]
     ) -> Dict[actions.Edit, float]:
         """Maps generative oracle's edit to conditional counterpart.
@@ -317,7 +425,7 @@ class TransducerRNNModel(rnn.RNNModel):
             remapped_action_scores[remapped_action] = score
         return remapped_action_scores
 
-    def expert_rollout(
+    def _expert_rollout(
         self,
         source: List[int],
         target: List[int],
@@ -342,18 +450,18 @@ class TransducerRNNModel(rnn.RNNModel):
             prediction,
             max_action_seq_len=self.max_target_length,
         )
-        action_scores = self.remap_actions(raw_action_scores)
+        action_scores = self._remap_actions(raw_action_scores)
         optimal_value = min(action_scores.values())
         optimal_action = sorted(
             [
-                self.actions.encode_unseen_action(action)
+                self.expert.actions.encode_unseen_action(action)
                 for action, value in action_scores.items()
                 if value == optimal_value
             ]
         )
         return optimal_action
 
-    def batch_expert_rollout(
+    def _batch_expert_rollout(
         self,
         source: List[List[int]],
         target: List[List[int]],
@@ -363,17 +471,13 @@ class TransducerRNNModel(rnn.RNNModel):
     ) -> List[List[int]]:
         """Performs expert rollout over batch."""
         return [
-            (
-                self.expert_rollout(s, t, align, pred)
-                if nc
-                else self.actions.end_idx
-            )
+            (self._expert_rollout(s, t, align, pred) if nc else self.end_idx)
             for s, t, align, pred, nc in zip(
                 source, target, alignment, prediction, not_complete
             )
         ]
 
-    def update_prediction(
+    def _update_prediction(
         self,
         action: List[actions.Edit],
         source: List[int],
@@ -394,11 +498,9 @@ class TransducerRNNModel(rnn.RNNModel):
         Return:
             torch.Tensor: new alignments for transduction.
         """
-        alignment_update = torch.zeros(
-            alignment.shape, device=self.device, dtype=torch.int64
-        )
+        alignment_update = torch.zeros_like(alignment)
         for i in range(len(source)):
-            a = self.actions.decode(action[i])
+            a = self.expert.actions.decode(action[i])
             if isinstance(a, actions.ConditionalCopy):
                 symb = source[i][alignment[i]]
                 prediction[i].append(symb)
@@ -417,7 +519,7 @@ class TransducerRNNModel(rnn.RNNModel):
         return alignment + alignment_update
 
     @staticmethod
-    def log_sum_softmax_loss(
+    def _log_sum_softmax_loss(
         logits: torch.Tensor, optimal_actions: List[int]
     ) -> torch.Tensor:
         """Computes log loss.
@@ -441,7 +543,8 @@ class TransducerRNNModel(rnn.RNNModel):
     def _get_loss_func(
         self,
     ) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
-        # Prevents base construction of unused loss function.
+        # Prevents base construction of unused loss function; we don't need a
+        # separate one because the forward pass computes loss as a side-effect.
         return None
 
     def training_step(self, batch: data.PaddedBatch, batch_idx: int) -> Dict:
@@ -470,7 +573,7 @@ class TransducerRNNModel(rnn.RNNModel):
     def validation_step(self, batch: data.PaddedBatch, batch_idx: int) -> Dict:
         predictions, loss = self(batch)
         # Evaluation requires prediction as a tensor.
-        predictions = self.convert_predictions(predictions)
+        predictions = self._convert_predictions(predictions)
         # Gets a dict of all eval metrics for this batch.
         val_eval_items_dict = {
             evaluator.name: evaluator.evaluate(
@@ -488,19 +591,19 @@ class TransducerRNNModel(rnn.RNNModel):
     ) -> torch.Tensor:
         predictions, _ = self(batch)
         # Evaluation requires prediction tensor.
-        return self.convert_predictions(predictions)
+        return self._convert_predictions(predictions)
 
-    def convert_predictions(
+    def _convert_predictions(
         self, predictions: List[List[int]]
     ) -> torch.Tensor:
         """Converts prediction values to tensor for evaluator compatibility."""
         # FIXME: the two steps below may be partially redundant.
         # TODO: Clean this up and make it more efficient.
         max_len = len(max(predictions, key=len))
-        for i, pred in enumerate(predictions):
-            pad = [self.actions.end_idx] * (max_len - len(pred))
-            pred.extend(pad)
-            predictions[i] = torch.tensor(pred, dtype=torch.int)
+        for i, prediction in enumerate(predictions):
+            pad = [self.end_idx] * (max_len - len(prediction))
+            prediction.extend(pad)
+            predictions[i] = torch.tensor(prediction)
         predictions = torch.stack(predictions)
         # This turns all symbols after the first END into PAD so prediction
         # tensors match gold tensors.
@@ -511,15 +614,17 @@ class TransducerRNNModel(rnn.RNNModel):
         self.expert.roll_in_schedule(self.current_epoch)
 
     @staticmethod
-    def sample(log_probs: torch.Tensor) -> torch.Tensor:
+    def _sample(log_probs: torch.Tensor) -> torch.Tensor:
         """Samples an action from a log-probability distribution."""
         dist = torch.exp(log_probs)
         rand = numpy.random.rand()
-        for action, p in enumerate(dist):
-            rand -= p
+        for action, prob in enumerate(dist):
+            rand -= prob
             if rand <= 0:
                 break
         return action
+
+    # Interface to implement.
 
     def get_decoder(self):
         raise NotImplementedError
@@ -532,87 +637,13 @@ class TransducerRNNModel(rnn.RNNModel):
 class TransducerGRUModel(TransducerRNNModel, rnn.GRUModel):
     """Transducer with GRU backend."""
 
-    # h0: nn.Parameter
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # self.h0 = nn.Parameter(torch.rand(self.hidden_size))
-
-    def forward(
-        self,
-        batch: data.PaddedBatch,
-    ) -> Tuple[List[List[int]], torch.Tensor]:
-        """Runs the encoder-decoder model.
-
-        Args:
-            batch (data.PaddedBatch).
-
-        Returns:
-            Tuple[List[List[int]], torch.Tensor]: encoded prediction values
-                and loss tensor; due to transducer setup, prediction is
-                performed during training, so these are returned.
-        """
-        encoder_out = self.source_encoder(batch.source)
-        encoded = encoder_out.output[:, 1:, :]  # Ignores start symbol.
-        source_padded = batch.source.padded[:, 1:]
-        source_mask = batch.source.mask[:, 1:]
-        # Start of decoding.
-        if self.has_features_encoder:
-            features_encoder_out = self.features_encoder(batch.features)
-            features_encoded = features_encoder_out.output
-            if features_encoder_out.has_hiddens:
-                h_features = features_encoder_out.hiddens
-                last_hiddens = h_features.mean(dim=0, keepdim=True).expand(
-                    self.decoder_layers, -1, -1
-                )
-                last_hiddens = h_features
-            else:
-                last_hiddens = self.init_hiddens(source_mask.shape[0])
-            features_encoded = features_encoded.mean(dim=1, keepdim=True)
-            encoded = torch.cat(
-                (
-                    encoded,
-                    features_encoded.expand(-1, encoded.shape[1], -1),
-                ),
-                dim=2,
-            )
-        else:
-            last_hiddens = self.init_hiddens(source_mask.shape[0])
-        if self.beam_width > 1:
-            # Will raise a NotImplementedError.
-            return self.beam_decode(
-                encoded,
-                last_hiddens,
-                source_padded,
-                source_mask,
-                teacher_forcing=(
-                    self.teacher_forcing if self.training else False
-                ),
-                target=batch.target.padded if batch.target else None,
-                target_mask=batch.target.mask if batch.target else None,
-            )
-        else:
-            return self.greedy_decode(
-                encoded,
-                last_hiddens,
-                source_padded,
-                source_mask,
-                teacher_forcing=(
-                    self.teacher_forcing if self.training else False
-                ),
-                target=batch.target.padded if batch.target else None,
-                target_mask=batch.target.mask if batch.target else None,
-            )
 
     def get_decoder(self) -> modules.GRUDecoder:
         return modules.GRUDecoder(
             bidirectional=False,
-            decoder_input_size=(
-                self.source_encoder.output_size
-                + self.features_encoder.output_size
-                if self.has_features_encoder
-                else self.source_encoder.output_size
-            ),
+            decoder_input_size=self.decoder_input_size,
             dropout=self.dropout,
             embeddings=self.embeddings,
             embedding_size=self.embedding_size,
@@ -626,113 +657,16 @@ class TransducerGRUModel(TransducerRNNModel, rnn.GRUModel):
         return "transducer GRU"
 
 
-class TransducerLSTMModel(TransducerRNNModel):
+class TransducerLSTMModel(TransducerRNNModel, rnn.LSTMModel):
     """Transducer with LSTM backend."""
-
-    h0: nn.Parameter
-    c0: nn.Parameter
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.h0 = nn.Parameter(torch.rand(self.hidden_size))
-        self.c0 = nn.Parameter(torch.rand(self.hidden_size))
-
-    def forward(
-        self,
-        batch: data.PaddedBatch,
-    ) -> Tuple[List[List[int]], torch.Tensor]:
-        """Runs the encoder-decoder model.
-
-        Args:
-            batch (data.PaddedBatch).
-
-        Returns:
-            Tuple[List[List[int]], torch.Tensor]: encoded prediction values
-                and loss tensor; due to transducer setup, prediction is
-                performed during training, so these are returned.
-        """
-        encoder_out = self.source_encoder(batch.source)
-        encoded = encoder_out.output[:, 1:, :]  # Ignores start symbol.
-        source_padded = batch.source.padded[:, 1:]
-        source_mask = batch.source.mask[:, 1:]
-        # Start of decoding.
-        if self.has_features_encoder:
-            features_encoder_out = self.features_encoder(batch.features)
-            features_encoded = features_encoder_out.output
-            if features_encoder_out.has_hiddens:
-                h_features, c_features = features_encoder_out.hiddens
-                h_features = h_features.mean(dim=0, keepdim=True).expand(
-                    self.decoder_layers, -1, -1
-                )
-                c_features = c_features.mean(dim=0, keepdim=True).expand(
-                    self.decoder_layers, -1, -1
-                )
-                last_hiddens = h_features, c_features
-            else:
-                last_hiddens = self.init_hiddens(source_mask.shape[0])
-            features_encoded = features_encoded.mean(dim=1, keepdim=True)
-            encoded = torch.cat(
-                (
-                    encoded,
-                    features_encoded.expand(-1, encoded.shape[1], -1),
-                ),
-                dim=2,
-            )
-        else:
-            last_hiddens = self.init_hiddens(source_mask.shape[0])
-        if self.beam_width > 1:
-            # Will raise a NotImplementedError.
-            return self.beam_decode(
-                encoded,
-                last_hiddens,
-                source_padded,
-                source_mask,
-                teacher_forcing=(
-                    self.teacher_forcing if self.training else False
-                ),
-                target=batch.target.padded if batch.target else None,
-                target_mask=batch.target.mask if batch.target else None,
-            )
-        else:
-            return self.greedy_decode(
-                encoded,
-                last_hiddens,
-                source_padded,
-                source_mask,
-                teacher_forcing=(
-                    self.teacher_forcing if self.training else False
-                ),
-                target=batch.target.padded if batch.target else None,
-                target_mask=batch.target.mask if batch.target else None,
-            )
-
-    def init_hiddens(
-        self, batch_size: int
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Initializes the hidden state to pass to the RNN.
-
-        We treat the initial value as a model parameter.
-
-        Args:
-            batch_size (int).
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor].
-        """
-        return (
-            self.h0.repeat(self.decoder_layers, batch_size, 1),
-            self.c0.repeat(self.decoder_layers, batch_size, 1),
-        )
 
     def get_decoder(self) -> modules.LSTMDecoder:
         return modules.LSTMDecoder(
             bidirectional=False,
-            decoder_input_size=(
-                self.source_encoder.output_size
-                + self.features_encoder.output_size
-                if self.has_features_encoder
-                else self.source_encoder.output_size
-            ),
+            decoder_input_size=self.decoder_input_size,
             dropout=self.dropout,
             embeddings=self.embeddings,
             embedding_size=self.embedding_size,

@@ -222,10 +222,9 @@ class GRUDecoder(RNNDecoder):
         last_encoder_output = self._last_encoder_output(
             encoder_output, encoder_mask
         )
-
         output, hidden = self.module(
-            torch.cat((embedded, last_encoder_output), 2),
-            (decoder_input.hidden, decoder_input.cell),
+            torch.cat((embedded, last_encoder_output), dim=2),
+            decoder_input.hidden,
         )
         self.dropout_layer(output)
         return base.ModuleOutput(output, hidden)
@@ -275,7 +274,7 @@ class LSTMDecoder(RNNDecoder):
             encoder_output, encoder_mask
         )
         output, (hidden, cell) = self.module(
-            torch.cat((embedded, last_encoder_output), 2),
+            torch.cat((embedded, last_encoder_output), dim=2),
             (decoder_input.hidden, decoder_input.cell),
         )
         self.dropout_layer(output)
@@ -326,7 +325,7 @@ class AttentiveGRUDecoder(AttentiveRNNDecoder, GRUDecoder):
             decoder_input.hidden.transpose(0, 1), encoder_output, encoder_mask
         )
         output, hidden = self.module(
-            torch.cat((embedded, context), 2), decoder_input.hidden
+            torch.cat((embedded, context), dim=2), decoder_input.hidden
         )
         self.dropout_layer(output)
         return base.ModuleOutput(output, hidden)
@@ -373,7 +372,7 @@ class AttentiveLSTMDecoder(AttentiveRNNDecoder, LSTMDecoder):
             decoder_input.hidden.transpose(0, 1), encoder_output, encoder_mask
         )
         output, (hidden, cell) = self.module(
-            torch.cat((embedded, context), 2),
+            torch.cat((embedded, context), dim=2),
             (decoder_input.hidden, decoder_input.cell),
         )
         self.dropout_layer(output)

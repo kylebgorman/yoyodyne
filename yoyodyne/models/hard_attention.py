@@ -14,12 +14,12 @@ class HardAttentionRNNModel(rnn.RNNModel):
     """Base class for hard attention models.
 
     Learns probability distribution of target string by modeling transduction
-    of source string to target string as Markov process. Assumes each character
-    produced is conditioned by state transitions over each source character.
+    of source string to target string as Markov process. Assumes each symbol
+    produced is conditioned by state transitions over each source symbol.
 
     Default model assumes independence between state and non-monotonic
     progression over source string. `enforce_monotonic` enforces monotonic
-    state transition (model progresses over each source character), and
+    state transition (model progresses over each source symbol), and
     `attention_context` allows conditioning of state transition over the
     previous n states.
 
@@ -61,6 +61,80 @@ class HardAttentionRNNModel(rnn.RNNModel):
             self.teacher_forcing
         ), "Teacher forcing disabled but required by this model"
 
+    # Properties.
+
+    @property
+    def decoder_input_size(self) -> int:
+        if self.has_features_encoder:
+            return (
+                self.source_encoder.output_size
+                + self.features_encoder.output_size
+            )
+        else:
+            return self.source_encoder.output_size
+
+    # Implemented interface.
+
+    def forward(
+        self,
+        batch: data.PaddedBatch,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Runs the encoder-decoder model.
+
+        Args:
+            batch (data.PaddedBatch).
+
+        Returns:
+            Tuple[torch.Tensor,torch.Tensor]: emission probabilities for
+                each transition state of shape
+                target_len x B x src_len x vocab_size, and transition
+                probabilities for each transition
+
+        Raises:
+            NotImplementedError: beam search not implemented.
+        """
+        encoder_output = self.source_encoder(batch.source).output
+        if self.has_features_encoder:
+            encoder_output = self._combine_source_and_features_encoder_output(
+                encoder_output,
+                self.features_encoder(batch.features).output,
+            )
+        if self.training:
+            return self.decode(
+                encoder_output,
+                batch.source.mask,
+                batch.target.padded,
+            )
+        elif self.beam_width > 1:
+            # Will raise a NotImplementedError.
+            return self.beam_decode(encoder_output, batch.source.mask)
+        else:
+            return self.greedy_decode(encoder_output, batch.source.mask)
+
+    def _combine_source_and_features_encoder_output(
+        self,
+        source_encoder_output: torch.Tensor,
+        features_encoder_output: torch.Tensor,
+    ) -> torch.Tensor:
+        """Combines source and features encodings.
+
+        Args:
+            source_encoder_output (torch.Tensor),
+            features_encoder_output (torch.Tensor),
+
+        Returns:
+            torch.Tensor.
+        """
+        features_encoder_output = features_encoder_output.sum(
+            dim=1, keepdim=True
+        )
+        features_encoder_output = features_encoder_output.expand(
+            -1, source_encoder_output.shape[1], -1
+        )
+        return torch.cat(
+            (source_encoder_output, features_encoder_output), dim=-1
+        )
+
     def beam_decode(self, *args, **kwargs):
         """Overrides incompatible implementation inherited from RNNModel."""
         raise NotImplementedError(
@@ -79,13 +153,9 @@ class HardAttentionRNNModel(rnn.RNNModel):
         `target` args.
 
         Args:
-            encoder_output (torch.Tensor): batch of encoded input symbols
-                of shape batch_size x src_len x (encoder_hidden *
-                num_directions).
-            encoder_mask (torch.Tensor): mask for the batch of encoded
-                input symbols of shape batch_size x src_len.
-            target (torch.Tensor): target symbols, decodes up to
-                `len(target)` symbols.
+            encoder_output (torch.Tensor): encoded source symbols.
+            encoder_mask (torch.Tensor): source symbol mask.
+            target (torch.Tensor): target symbols.
 
         Returns:
             Tuple[torch.Tensor,torch.Tensor]: emission probabilities
@@ -104,8 +174,8 @@ class HardAttentionRNNModel(rnn.RNNModel):
         decoder_output = self.decode_step(
             decoder_input, encoder_output, encoder_mask
         )
-        emissions.append(decoder_output.output)
-        transitions.append(decoder_output.embedded)
+        emissions.append(decoder_output.emissions)
+        transitions.append(decoder_output.transitions)
         for target_symbol_idx in range(target.size(1)):
             decoder_input = modules.ModuleOutput(
                 target[:, target_symbol_idx].unsqueeze(-1),
@@ -129,12 +199,12 @@ class HardAttentionRNNModel(rnn.RNNModel):
 
         Args:
             decoder_input (modules.ModuleOutput).
-            encoder_output (torch.Tensor): batch of encoded source symbols.
+            encoder_output (torch.Tensor): encoded source symbols.
             encoder_mask (torch.Tensor): source symbol mask.
 
         Returns:
-            modules.ModuleOutput: emissions, hidden (and where appropriate) cell
-                states, and transitions.
+            modules.ModuleOutput: emissions, hidden (and where appropriate)
+                cell states, and transitions.
         """
         decoder_output = self.decoder(
             decoder_input, encoder_output, encoder_mask
@@ -161,10 +231,8 @@ class HardAttentionRNNModel(rnn.RNNModel):
         specified length depending on the `target` args.
 
         Args:
-            encoder_output (torch.Tensor): batch of encoded input symbols
-                of shape B x src_len x (encoder_hidden * num_directions).
-            encoder_mask (torch.Tensor): mask for the batch of encoded
-                input symbols of shape B x src_len.
+            encoder_output (torch.Tensor): encoded source symbols.
+            encoder_mask (torch.Tensor): source symbol mask.
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: predictions of shape B
@@ -180,7 +248,7 @@ class HardAttentionRNNModel(rnn.RNNModel):
         predictions = self._greedy_step(decoder_output.emissions, likelihood)
         finished = torch.zeros(
             batch_size, dtype=torch.bool, device=self.device
-        ) .unsqueeze(-1)
+        )  # .unsqueeze(-1)
         for t in range(self.max_target_length):
             decoder_input = modules.ModuleOutput(
                 predictions[:, t].unsqueeze(-1),
@@ -190,9 +258,11 @@ class HardAttentionRNNModel(rnn.RNNModel):
             decoder_output = self.decode_step(
                 decoder_input, encoder_output, encoder_mask
             )
-            print("likelihood:", likelihood.shape)
-            print("transitions:", decoder_output.transitions.transpose(1, 2).shape)
-            likelihood += decoder_output.transitions.transpose(1, 2)
+            # Likelihood is broadcasting over the second dimension, which is
+            # why `+=` is not applicable here.
+            likelihood = likelihood + decoder_output.transitions.transpose(
+                1, 2
+            )
             likelihood = likelihood.logsumexp(dim=-1, keepdim=True).transpose(
                 1, 2
             )
@@ -200,13 +270,15 @@ class HardAttentionRNNModel(rnn.RNNModel):
                 decoder_output.emissions, likelihood
             )
             finished = torch.logical_or(
-                finished, (predictions == special.END_IDX)
+                finished, (prediction == special.END_IDX)
             )
             if finished.all():
                 break
             predictions = torch.cat((predictions, prediction), dim=-1)
             # prediction = torch.where(~finished, prediction, special.PAD_IDX)
-            likelihoods += self._gather_at_idx(emissions, prediction)
+            likelihood += self._gather_at_idx(
+                decoder_output.emissions, prediction
+            )
         return predictions, likelihood
 
     @staticmethod
@@ -224,33 +296,37 @@ class HardAttentionRNNModel(rnn.RNNModel):
         """
         predictions = likelihood + emissions.transpose(1, 2)
         predictions = predictions.logsumexp(dim=-1)
-        _, predictions = torch.max(predictions, dim=-1, keepdim=True)
+        predictions = torch.argmax(predictions, dim=-1, keepdim=True)
         return predictions
 
     @staticmethod
     def _gather_at_idx(
-        prob: torch.Tensor, target: torch.Tensor
+        emissions: torch.Tensor, target: torch.Tensor
     ) -> torch.Tensor:
         """Collects probability of target index across all states in prob.
 
         To calculate the final emission probability, the pseudo-HMM
         graph needs to aggregate the final emission probabilities of
-        target char across all potential hidden states in prob.
+        target symbol across all potential hidden states in prob.
 
         Args:
-            prob (torch.Tensor): log probabilities of emission states of shape
-                B x src_len x vocab_size.
-            target (torch.Tensor): target symbol to poll probabilities for
-                shape B.
+            emissions (torch.Tensor): log probabilities of emission states of
+                shape B x src_len x vocab_size.
+            target (torch.Tensor): target symbol to poll probabilities for,
+                of shape B.
 
         Returns:
-            torch.Tensor: emission probabilities of target symbol for each hidden
-                state of size B 1 x src_len.
+            torch.Tensor: emission probabilities of target symbol for each
+                hidden state of size B 1 x src_len.
         """
-        batch_size, src_seq_len, _ = prob.shape
-        idx = target.view(-1, 1).expand(batch_size, src_seq_len).unsqueeze(-1)
-        output = torch.gather(prob, -1, idx).view(batch_size, 1, src_seq_len)
-        idx = idx.view(batch_size, 1, src_seq_len)
+        batch_size, src_seq_length, _ = emissions.shape
+        idx = (
+            target.view(-1, 1).expand(batch_size, src_seq_length).unsqueeze(-1)
+        )
+        output = torch.gather(emissions, -1, idx).view(
+            batch_size, 1, src_seq_length
+        )
+        idx = idx.view(batch_size, 1, src_seq_length)
         pad_mask = (idx != special.PAD_IDX).float()
         return output * pad_mask
 
@@ -281,60 +357,6 @@ class HardAttentionRNNModel(rnn.RNNModel):
             -1, keepdim=True
         )
         return transition_prob
-
-    def forward(
-        self,
-        batch: data.PaddedBatch,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Runs the encoder-decoder model.
-
-        Args:
-            batch (data.PaddedBatch).
-
-        Returns:
-            Tuple[torch.Tensor,torch.Tensor]: emission probabilities for
-                each transition state of shape
-                target_len x B x src_len x vocab_size, and transition
-                probabilities for each transition
-
-        Raises:
-            NotImplementedError: beam search not implemented.
-        """
-        encoder_output = self.source_encoder(batch.source).output
-        if self.has_features_encoder:
-            encoder_output = self._combine_source_and_features_encoder_output(
-                encoder_output,
-                self.features_encoder(batch.features).output,
-            )
-        if self.beam_width > 1:
-            # Will raise a NotImplementedError.
-            return self.beam_decode(encoder_output, batch.source.mask)
-        else:
-            return self.greedy_decode(encoder_output, batch.source.mask)
-
-    def _combine_source_and_features_encoder_output(
-        self,
-        source_encoder_output: torch.Tensor,
-        features_encoder_output: torch.Tensor,
-    ) -> torch.Tensor:
-        """Combines source and features encodings.
-
-        Args:
-            source_encoder_output (torch.Tensor),
-            features_encoder_output (torch.Tensor),
-
-        Returns:
-            torch.Tensor.
-        """
-        features_encoder_output = features_encoder_output.sum(
-            dim=1, keepdim=True
-        )
-        features_encoder_output = features_encoder_output.expand(
-            -1, encoder_out.shape[1], -1
-        )
-        return torch.cat(
-            (source_encoder_output, features_encoder_output), dim=-1
-        )
 
     def training_step(
         self, batch: data.PaddedBatch, batch_idx: int
@@ -393,23 +415,22 @@ class HardAttentionRNNModel(rnn.RNNModel):
     def _loss(
         self,
         target: torch.Tensor,
-        log_probs: torch.Tensor,
-        transition_probs: torch.Tensor,
+        emissions: torch.Tensor,
+        transitions: torch.Tensor,
     ) -> torch.Tensor:
         # TODO: Currently we're storing a concatenation of loss tensors for
         # each time step. This is costly. Revisit this calculation and see if
         # we can use DP to simplify.
-        fwd = transition_probs[0, :, 0].unsqueeze(1) + self._gather_at_idx(
-            log_probs[0], target[:, 0]
+        fwd = transitions[0, :, 0].unsqueeze(1) + self._gather_at_idx(
+            emissions[0], target[:, 0]
         )
-        for target_char_idx in range(1, target.shape[1]):
-            fwd = fwd + transition_probs[target_char_idx].transpose(1, 2)
+        for target_symbol_idx in range(1, target.shape[1]):
+            fwd = fwd + transitions[target_symbol_idx].transpose(1, 2)
             fwd = fwd.logsumexp(dim=-1, keepdim=True).transpose(1, 2)
             fwd = fwd + self._gather_at_idx(
-                log_probs[target_char_idx], target[:, target_char_idx]
+                emissions[target_symbol_idx], target[:, target_symbol_idx]
             )
-        loss = -torch.logsumexp(fwd, dim=-1).mean() / target.shape[1]
-        return loss
+        return -torch.logsumexp(fwd, dim=-1).mean() / target.shape[1]
 
     # Interface.
 
@@ -419,6 +440,8 @@ class HardAttentionRNNModel(rnn.RNNModel):
     @property
     def name(self) -> str:
         raise NotImplementedError
+
+    # Flags.
 
     @staticmethod
     def add_argparse_args(parser: argparse.ArgumentParser) -> None:
@@ -456,12 +479,7 @@ class HardAttentionGRUModel(HardAttentionRNNModel, rnn.GRUModel):
             return modules.ContextHardAttentionGRUDecoder(
                 attention_context=self.attention_context,
                 bidirectional=False,
-                decoder_input_size=(
-                    self.source_encoder.output_size
-                    + self.features_encoder.output_size
-                    if self.has_features_encoder
-                    else self.source_encoder.output_size
-                ),
+                decoder_input_size=self.decoder_input_size,
                 dropout=self.dropout,
                 embeddings=self.embeddings,
                 embedding_size=self.embedding_size,
@@ -472,12 +490,7 @@ class HardAttentionGRUModel(HardAttentionRNNModel, rnn.GRUModel):
         else:
             return modules.HardAttentionGRUDecoder(
                 bidirectional=False,
-                decoder_input_size=(
-                    self.source_encoder.output_size
-                    + self.features_encoder.output_size
-                    if self.has_features_encoder
-                    else self.source_encoder.output_size
-                ),
+                decoder_input_size=self.decoder_input_size,
                 dropout=self.dropout,
                 embedding_size=self.embedding_size,
                 embeddings=self.embeddings,
@@ -499,12 +512,7 @@ class HardAttentionLSTMModel(HardAttentionRNNModel, rnn.LSTMModel):
             return modules.ContextHardAttentionLSTMDecoder(
                 attention_context=self.attention_context,
                 bidirectional=False,
-                decoder_input_size=(
-                    self.source_encoder.output_size
-                    + self.features_encoder.output_size
-                    if self.has_features_encoder
-                    else self.source_encoder.output_size
-                ),
+                decoder_input_size=self.decoder_input_size,
                 dropout=self.dropout,
                 hidden_size=self.hidden_size,
                 embeddings=self.embeddings,
@@ -515,12 +523,7 @@ class HardAttentionLSTMModel(HardAttentionRNNModel, rnn.LSTMModel):
         else:
             return modules.HardAttentionLSTMDecoder(
                 bidirectional=False,
-                decoder_input_size=(
-                    self.source_encoder.output_size
-                    + self.features_encoder.output_size
-                    if self.has_features_encoder
-                    else self.source_encoder.output_size
-                ),
+                decoder_input_size=self.decoder_input_size,
                 dropout=self.dropout,
                 embeddings=self.embeddings,
                 embedding_size=self.embedding_size,

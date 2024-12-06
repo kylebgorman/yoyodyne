@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 from torch import nn
 
-from ... import defaults, special
+from ... import defaults
 from . import base, rnn
 
 
@@ -195,7 +195,9 @@ class HardAttentionLSTMDecoder(HardAttentionRNNDecoder):
                 matrix, and hidden states of decoder.
         """
         embedded = self.embed(decoder_input.output)
-        output, (hidden, cell) = self.module(embedded, decoder_input.hidden)
+        output, (hidden, cell) = self.module(
+            embedded, (decoder_input.hidden, decoder_input.cell)
+        )
         emissions = self._emissions(output, encoder_output)
         transitions = self._transitions(output, encoder_output, encoder_mask)
         return HardAttentionModuleOutput(emissions, transitions, hidden, cell)
@@ -249,7 +251,7 @@ class ContextHardAttentionRNNDecoder(HardAttentionRNNDecoder):
         # Limits context to window of self.delta (context length).
         alignment_probs = alignment_probs.split(1, dim=1)
         alignment_probs = torch.cat(
-            (
+            [
                 nn.functional.pad(
                     t,
                     (
@@ -258,7 +260,7 @@ class ContextHardAttentionRNNDecoder(HardAttentionRNNDecoder):
                     ),
                 )
                 for i, t in enumerate(alignment_probs)
-            ),
+            ],
             dim=1,
         )
         # Gets probability of alignments, masking padding.

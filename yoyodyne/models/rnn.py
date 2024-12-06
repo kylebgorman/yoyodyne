@@ -26,6 +26,8 @@ class RNNModel(base.BaseModel):
         self.classifier = nn.Linear(self.hidden_size, self.target_vocab_size)
         self.h0 = nn.Parameter(torch.rand(self.hidden_size))
 
+    # Implemented interface.
+
     def init_embeddings(
         self,
         num_embeddings: int,
@@ -41,10 +43,6 @@ class RNNModel(base.BaseModel):
             nn.Embedding: embedding layer.
         """
         return embeddings.normal_embedding(num_embeddings, embedding_size)
-
-    def initial_input(self, batch_size: int) -> modules.ModuleOutput:
-        """The decoder input at the start of decoding."""
-        raise NotImplementedError
 
     def _initial_symbol(self, batch_size: int) -> torch.Tensor:
         """The initial symbol.
@@ -74,6 +72,37 @@ class RNNModel(base.BaseModel):
         """
         return self.h0.repeat(self.decoder_layers, batch_size, 1)
 
+    def forward(
+        self,
+        batch: data.PaddedBatch,
+    ) -> Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
+        """Runs the encoder-decoder model.
+
+        Args:
+            batch (data.PaddedBatch).
+
+        Returns:
+            Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
+                for beam decoding, a tuple of predictions and unnormalized log
+                likelihoods for each prediction; for greedy decoding, the
+                predictions tensor.
+        """
+        encoder_output = self.source_encoder(batch.source).output
+        # This method has a polymorphic return type because beam search needs
+        # to return the log-likelihoods too.
+        if self.beam_width > 1:
+            return self.beam_decode(
+                encoder_output,
+                batch.source.mask,
+            )
+        else:
+            return self.greedy_decode(
+                encoder_output,
+                batch.source.mask,
+                self.teacher_forcing if self.training else False,
+                batch.target.padded if batch.target else None,
+            )
+
     def beam_decode(
         self,
         encoder_output: torch.Tensor,
@@ -82,7 +111,7 @@ class RNNModel(base.BaseModel):
         """Decodes with a beam.
 
         Args:
-            encoder_output (torch.Tensor): batch of encoded source symbols.
+            encoder_output (torch.Tensor): encoded source symbols.
             encoder_mask (torch.Tensor): source symbol mask.
 
         Returns:
@@ -142,7 +171,7 @@ class RNNModel(base.BaseModel):
         specified length depending on the `target` args.
 
         Args:
-            encoder_output (torch.Tensor): batch of encoded source symbols.
+            encoder_output (torch.Tensor): encoded source symbols.
             encoder_mask (torch.Tensor): source symbol mask.
             teacher_forcing (bool): Whether or not to decode with teacher
                 forcing.
@@ -194,36 +223,20 @@ class RNNModel(base.BaseModel):
                         break
         return torch.stack(predictions).transpose(0, 1)
 
-    def forward(
-        self,
-        batch: data.PaddedBatch,
-    ) -> Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
-        """Runs the encoder-decoder model.
+    # Interface.
 
-        Args:
-            batch (data.PaddedBatch).
+    def get_decoder(self):
+        raise NotImplementedError
 
-        Returns:
-            Union[Tuple[torch.Tensor, torch.Tensor], torch.Tensor]:
-                for beam decoding, a tuple of predictions and unnormalized log
-                likelihoods for each prediction; for greedy decoding, the
-                predictions tensor.
-        """
-        encoder_output = self.source_encoder(batch.source).output
-        # This method has a polymorphic return type because beam search needs
-        # to return the log-likelihoods too.
-        if self.beam_width > 1:
-            return self.beam_decode(
-                encoder_output,
-                batch.source.mask,
-            )
-        else:
-            return self.greedy_decode(
-                encoder_output,
-                batch.source.mask,
-                self.teacher_forcing if self.training else False,
-                batch.target.padded if batch.target else None,
-            )
+    def initial_input(self, batch_size: int) -> modules.ModuleOutput:
+        """The decoder input at the start of decoding."""
+        raise NotImplementedError
+
+    @property
+    def name(self) -> str:
+        raise NotImplementedError
+
+    # Flags.
 
     @staticmethod
     def add_argparse_args(parser: argparse.ArgumentParser) -> None:
@@ -244,18 +257,6 @@ class RNNModel(base.BaseModel):
             action="store_false",
             dest="bidirectional",
         )
-
-    # Interface.
-
-    def get_decoder(self):
-        raise NotImplementedError
-
-    def initial_input(self, batch_size: int) -> modules.ModuleOutput:
-        raise NotImplementedError
-
-    @property
-    def name(self) -> str:
-        raise NotImplementedError
 
 
 class GRUModel(RNNModel):

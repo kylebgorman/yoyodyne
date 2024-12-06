@@ -157,24 +157,7 @@ class BaseModel(lightning.LightningModule):
             util.log_info(f"Encoder: {self.source_encoder.name}")
         util.log_info(f"Decoder: {self.decoder.name}")
 
-    @staticmethod
-    def init_embeddings(num_embed: int, embed_size: int) -> nn.Embedding:
-        """Method interface for initializing the embedding layer.
-
-        Args:
-            num_embeddings (int): number of embeddings.
-            embedding_size (int): dimension of embeddings.
-
-        Raises:
-            NotImplementedError: This method needs to be overridden.
-
-        Returns:
-            nn.Embedding: embedding layer.
-        """
-        raise NotImplementedError
-
-    def get_decoder(self):
-        raise NotImplementedError
+    # Properties.
 
     @property
     def num_parameters(self) -> int:
@@ -183,6 +166,8 @@ class BaseModel(lightning.LightningModule):
     @property
     def has_features_encoder(self):
         return self.features_encoder is not None
+
+    # Implemented.
 
     def training_step(
         self,
@@ -314,8 +299,7 @@ class BaseModel(lightning.LightningModule):
             torch.Tensor: indices of the argmax at each timestep.
         """
         assert len(predictions.size()) == 3
-        _, indices = torch.max(predictions, dim=2)
-        return indices
+        return torch.argmax(predictions, dim=2)
 
     def configure_optimizers(
         self,
@@ -382,6 +366,29 @@ class BaseModel(lightning.LightningModule):
             ignore_index=special.PAD_IDX,
             label_smoothing=self.label_smoothing,
         )
+
+    # Interface to implement.
+
+    @staticmethod
+    def init_embeddings(num_embed: int, embed_size: int) -> nn.Embedding:
+        """Method interface for initializing the embedding layer.
+
+        Args:
+            num_embeddings (int): number of embeddings.
+            embedding_size (int): dimension of embeddings.
+
+        Raises:
+            NotImplementedError: This method needs to be overridden.
+
+        Returns:
+            nn.Embedding: embedding layer.
+        """
+        raise NotImplementedError
+
+    def get_decoder(self):
+        raise NotImplementedError
+
+    # Flags.
 
     @staticmethod
     def add_predict_argparse_args(parser: argparse.ArgumentParser) -> None:
