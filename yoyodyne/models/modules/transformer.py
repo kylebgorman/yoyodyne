@@ -193,8 +193,7 @@ class TransformerEncoder(TransformerModule):
             torch.Tensor: sequence of encoded symbols.
         """
         embedding = self.embed(source.padded)
-        output = self.module(embedding, src_key_padding_mask=source.mask)
-        return base.ModuleOutput(output)
+        return self.module(embedding, src_key_padding_mask=source.mask)
 
     def get_module(self) -> nn.TransformerEncoder:
         encoder_layer = nn.TransformerEncoderLayer(

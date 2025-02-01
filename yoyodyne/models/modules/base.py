@@ -2,7 +2,6 @@
 
 import abc
 import dataclasses
-from typing import Optional, Union, Tuple
 
 import lightning
 import torch
@@ -12,22 +11,14 @@ from ... import defaults
 
 
 @dataclasses.dataclass
-class ModuleOutput:
-    """Output for forward passes."""
+class BaseState:
+    """Base class for module state."""
 
-    output: torch.Tensor
-    hiddens: Optional[
-        Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]
-    ] = None
-    embeddings: Optional[torch.Tensor] = None
+    tensor: torch.Tensor
 
-    @property
-    def has_hiddens(self) -> bool:
-        return self.hiddens is not None
 
-    @property
-    def has_embeddings(self) -> bool:
-        return self.embeddings is not None
+class ModuleOutput(BaseState):
+    pass  # FIXME
 
 
 class BaseModule(abc.ABC, lightning.LightningModule):

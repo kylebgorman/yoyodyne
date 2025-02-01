@@ -61,7 +61,6 @@ class RNNModel(base.BaseModel):
             raise NotImplementedError(
                 "Beam search is not implemented for batch_size > 1"
             )
-        # Initializes hidden states for decoder LSTM.
         decoder_hiddens = self.init_hiddens(batch_size)
         # Log likelihood, last decoded idx, hidden state tensor.
         histories = [[0.0, [special.START_IDX], decoder_hiddens]]
@@ -177,7 +176,8 @@ class RNNModel(base.BaseModel):
                 a tensor of predictions of shape
                 B x seq_len x target_vocab_size.
         """
-        encoder_out = self.source_encoder(batch.source).output
+        # FIXME why does this even return a "state" in the first place?
+        encoder_out = self.source_encoder(batch.source).tensor
         # This function has a polymorphic return because beam search needs to
         # return two tensors. For greedy, the return has not been modified to
         # match the Tuple[torch.Tensor, torch.Tensor] type because the
@@ -223,13 +223,8 @@ class RNNModel(base.BaseModel):
             torch.Tensor: predictions of B x seq_length x target_vocab_size.
         """
         batch_size = encoder_mask.size(0)
-        # Initializes hidden states for decoder LSTM.
-        decoder_hiddens = self.init_hiddens(batch_size)
-        decoder_input = (
-            torch.tensor([special.START_IDX], device=self.device)
-            .repeat(batch_size)
-            .unsqueeze(1)
-        )
+        # Initializes hidden states for decoder.
+        state = self.init_state(batch_size)
         predictions = []
         if target is None:
             max_num_steps = self.max_target_length
@@ -239,30 +234,21 @@ class RNNModel(base.BaseModel):
             max_num_steps = target.size(1)
         for t in range(max_num_steps):
             # pred: B x 1 x output_size.
-            decoded = self.decoder(
-                decoder_input,
-                decoder_hiddens,
-                encoder_out,
-                encoder_mask,
-            )
-            decoder_output, decoder_hiddens = (
-                decoded.output,
-                decoded.hiddens,
-            )
-            logits = self.classifier(decoder_output)
+            state = self.decoder(state, encoder_out, encoder_mask)
+            logits = self.classifier(state.tensor)
             predictions.append(logits.squeeze(1))
             if teacher_forcing:
                 # Under teacher forcing the next input is the gold symbol for
                 # this step.
-                decoder_input = target[:, t].unsqueeze(1)
+                state.tensor = target[:, t].unsqueeze(1)
             else:
                 # Otherwise, under student forcing, the next input is the top
                 # prediction.
-                decoder_input = self._get_predicted(logits)
+                state.tensor = self._get_predicted(logits)
             if target is None:
                 # Updates which sequences have decoded an END.
                 finished = torch.logical_or(
-                    finished, (decoder_input == special.END_IDX)
+                    finished, (state.tensor == special.END_IDX)
                 )
                 if finished.all():
                     break
@@ -286,10 +272,38 @@ class RNNModel(base.BaseModel):
         """
         return embeddings.normal_embedding(num_embeddings, embedding_size)
 
-    @abc.abstractmethod
-    def init_hiddens(
-        self, batch_size: int
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]: ...
+    def init_state(self, batch_size: int) -> modules.RNNState:
+        return modules.RNNState(
+            self._init_input(batch_size),
+            self._init_hiddens(batch_size),
+        )
+
+    def _init_input(self, batch_size: int) -> torch.Tensor:
+        """Initializes the decoder input tensor.
+
+        Args:
+            batch_size (int).
+
+        Returns:
+            torch.Tensor: a tensor of shape B x 1 containing the start
+                symbol.
+        """
+        return torch.tensor([special.START_IDX], device=self.device).repeat(
+            batch_size, 1
+        )
+
+    def _init_hiddens(self, batch_size: int) -> torch.Tensor:
+        """Initializes the hidden state tensor.
+
+        We treat the initial value as a model parameter.
+
+        Args:
+            batch_size (int).
+
+        Returns:
+            torch.Tensor: hidden state for initialization.
+        """
+        return self.h0.repeat(self.decoder_layers, batch_size, 1)
 
     @property
     @abc.abstractmethod
@@ -310,19 +324,6 @@ class GRUModel(RNNModel):
             layers=self.decoder_layers,
             num_embeddings=self.vocab_size,
         )
-
-    def init_hiddens(self, batch_size: int) -> torch.Tensor:
-        """Initializes the hidden state to pass to the RNN.
-
-        We treat the initial value as a model parameter.
-
-        Args:
-            batch_size (int).
-
-        Returns:
-            torch.Tensor: hidden state for initialization.
-        """
-        return self.h0.repeat(self.decoder_layers, batch_size, 1)
 
     @property
     def name(self) -> str:
@@ -356,10 +357,15 @@ class LSTMModel(RNNModel):
             num_embeddings=self.vocab_size,
         )
 
-    def init_hiddens(
-        self, batch_size: int
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Initializes the hidden state to pass to the RNN.
+    def init_state(self, batch_size: int) -> modules.RNNState:
+        return modules.RNNState(
+            self._init_input(batch_size),
+            self._init_hiddens(batch_size),
+            self._init_cell(batch_size),
+        )
+
+    def _init_cell(self, batch_size: int) -> torch.Tensor:
+        """Initializes the cell state tensor.
 
         We treat the initial value as a model parameter.
 
@@ -367,12 +373,9 @@ class LSTMModel(RNNModel):
             batch_size (int).
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor].
+            torch.Tensor: cell state.
         """
-        return (
-            self.h0.repeat(self.decoder_layers, batch_size, 1),
-            self.c0.repeat(self.decoder_layers, batch_size, 1),
-        )
+        return self.c0.repeat(self.decoder_layers, batch_size, 1)
 
     @property
     def name(self) -> str:
