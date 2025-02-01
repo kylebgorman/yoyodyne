@@ -1,7 +1,6 @@
 """Base module class with PL integration."""
 
 import abc
-import dataclasses
 
 import lightning
 import torch
@@ -10,14 +9,7 @@ from torch import nn
 from ... import defaults
 
 
-@dataclasses.dataclass
-class BaseState:
-    """Base class for module state."""
-
-    tensor: torch.Tensor
-
-
-class ModuleOutput(BaseState):
+class ModuleOutput:  # FIXME
     pass  # FIXME
 
 

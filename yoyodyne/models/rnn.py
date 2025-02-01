@@ -1,4 +1,10 @@
-"""RNN model classes."""
+"""RNN model classes.
+
+RNNModel is the base class; it has an encoder and decoder modules,
+the classifier, and the initial decoder hidden state and provides methods
+for greedy and beam decoding. Subsequent derivations inject the appropriate
+concrete decoder modules.
+"""
 
 import abc
 import argparse
@@ -15,11 +21,12 @@ from . import base, embeddings, modules
 class RNNModel(base.BaseModel):
     """Abstract base class for RNN models.
 
-    The implementation of `get_decoder` in the derived classes determines not
-    just what kind of RNN is used (i.e., GRU or LSTM), and this decoder
-    implementation also determines whether this is inattentive---in which
-    case last (non-padding) hidden state of the encoder is the input to the
-    decoder---or attentive.
+    The implementation of `get_decoder` in the derived classes determines
+    what kind of RNNs are used (i.e., GRU or LSTM), and this determines
+    whether the model is "inattentive"---in which case the last (non-padding)
+    hidden state of the encoder is the input to the decoder---or attentive.
+
+    The initial decoder hidden is a learned parameter.
     """
 
     # Constructed inside __init__.
@@ -176,17 +183,16 @@ class RNNModel(base.BaseModel):
                 a tensor of predictions of shape
                 B x seq_len x target_vocab_size.
         """
-        # FIXME why does this even return a "state" in the first place?
-        encoder_out = self.source_encoder(batch.source).tensor
+        encoded = self.source_encoder(batch.source).sequence
         # This function has a polymorphic return because beam search needs to
         # return two tensors. For greedy, the return has not been modified to
         # match the Tuple[torch.Tensor, torch.Tensor] type because the
         # training and validation functions depend on it.
         if self.beam_width > 1:
-            return self.beam_decode(encoder_out, batch.source.mask)
+            return self.beam_decode(encoded, batch.source.mask)
         else:
             return self.greedy_decode(
-                encoder_out,
+                encoded,
                 batch.source.mask,
                 self.teacher_forcing if self.training else False,
                 batch.target.padded if batch.target else None,
@@ -197,8 +203,8 @@ class RNNModel(base.BaseModel):
 
     def greedy_decode(
         self,
-        encoder_out: torch.Tensor,
-        encoder_mask: torch.Tensor,
+        encoded: torch.Tensor,
+        mask: torch.Tensor,
         teacher_forcing: bool,
         target: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
@@ -211,8 +217,8 @@ class RNNModel(base.BaseModel):
         sequences have reached END.
 
         Args:
-            encoder_out (torch.Tensor): batch of encoded input symbols.
-            encoder_mask (torch.Tensor): mask for the batch of encoded
+            encoded (torch.Tensor): batch of encoded input symbols.
+            mask (torch.Tensor): mask for the batch of encoded
                 input symbols.
             teacher_forcing (bool): whether or not to decode with teacher
                 forcing.
@@ -222,7 +228,7 @@ class RNNModel(base.BaseModel):
         Returns:
             torch.Tensor: predictions of B x seq_length x target_vocab_size.
         """
-        batch_size = encoder_mask.size(0)
+        batch_size = mask.size(0)
         # Initializes hidden states for decoder.
         state = self.init_state(batch_size)
         predictions = []
@@ -234,21 +240,21 @@ class RNNModel(base.BaseModel):
             max_num_steps = target.size(1)
         for t in range(max_num_steps):
             # pred: B x 1 x output_size.
-            state = self.decoder(state, encoder_out, encoder_mask)
-            logits = self.classifier(state.tensor)
+            state = self.decoder(state, encoded, mask)
+            logits = self.classifier(state.sequence)
             predictions.append(logits.squeeze(1))
             if teacher_forcing:
                 # Under teacher forcing the next input is the gold symbol for
                 # this step.
-                state.tensor = target[:, t].unsqueeze(1)
+                state.sequence = target[:, t].unsqueeze(1)
             else:
                 # Otherwise, under student forcing, the next input is the top
                 # prediction.
-                state.tensor = self._get_predicted(logits)
+                state.sequence = self._get_predicted(logits)
             if target is None:
                 # Updates which sequences have decoded an END.
                 finished = torch.logical_or(
-                    finished, (state.tensor == special.END_IDX)
+                    finished, (state.sequence == special.END_IDX)
                 )
                 if finished.all():
                     break
@@ -273,6 +279,7 @@ class RNNModel(base.BaseModel):
         return embeddings.normal_embedding(num_embeddings, embedding_size)
 
     def init_state(self, batch_size: int) -> modules.RNNState:
+        print("Decoder initial state:")
         return modules.RNNState(
             self._init_input(batch_size),
             self._init_hiddens(batch_size),
@@ -294,8 +301,6 @@ class RNNModel(base.BaseModel):
 
     def _init_hiddens(self, batch_size: int) -> torch.Tensor:
         """Initializes the hidden state tensor.
-
-        We treat the initial value as a model parameter.
 
         Args:
             batch_size (int).
@@ -333,6 +338,9 @@ class GRUModel(RNNModel):
 class LSTMModel(RNNModel):
     """LSTM model without attention.
 
+    The initial decoder cell state (like the hidden state) is a learned
+    parameter.
+
     Args:
         *args: passed to superclass.
         **kwargs: passed to superclass.
@@ -366,8 +374,6 @@ class LSTMModel(RNNModel):
 
     def _init_cell(self, batch_size: int) -> torch.Tensor:
         """Initializes the cell state tensor.
-
-        We treat the initial value as a model parameter.
 
         Args:
             batch_size (int).
