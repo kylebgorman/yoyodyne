@@ -150,7 +150,7 @@ class DataModule(lightning.LightningDataModule):
 
     @staticmethod
     def pprint(vocabulary: Iterable) -> str:
-        """Prints the vocabulary for debugging dnd logging purposes."""
+        """Prints the vocabulary."""
         return ", ".join(f"{symbol!r}" for symbol in vocabulary)
 
     def log_vocabularies(self) -> None:
