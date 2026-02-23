@@ -121,7 +121,7 @@ class WrappedLSTMEncoder(nn.LSTM, WrappedRNNEncoder):
         return self._pad(packed)
 
 
-class RNNEncoder(RNNModule):
+class RNNEncoder(RNNModule, base.BaseEncoder):
     """Abstract base class for RNN encoders.
 
     Args:

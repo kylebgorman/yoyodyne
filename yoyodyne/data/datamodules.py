@@ -150,7 +150,7 @@ class DataModule(lightning.LightningDataModule):
 
     @staticmethod
     def pprint(vocabulary: Iterable) -> str:
-        """Prints the vocabulary for debugging dnd logging purposes."""
+        """Prints the vocabulary."""
         return ", ".join(f"{symbol!r}" for symbol in vocabulary)
 
     def log_vocabularies(self) -> None:
@@ -222,7 +222,10 @@ class DataModule(lightning.LightningDataModule):
         assert self.val is not None, "no val path"
         return data.DataLoader(
             datasets.MappableDataset(
-                self.val, mappers.Mapper(self.index), self.parser
+                self.val,
+                mappers.Mapper(self.index),
+                self.parser,
+                sequential=True,
             ),
             collate_fn=self.collator,
             batch_size=self.batch_size,
