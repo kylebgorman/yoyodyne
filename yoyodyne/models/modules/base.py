@@ -3,9 +3,10 @@
 import abc
 
 import lightning
+import torch
 from torch import nn
 
-from ... import defaults
+from ... import data, defaults
 
 
 class BaseModule(abc.ABC, lightning.LightningModule):
@@ -35,6 +36,27 @@ class BaseModule(abc.ABC, lightning.LightningModule):
         self.dropout = dropout
         self.dropout_layer = nn.Dropout(self.dropout)
         self.embedding_size = embedding_size
+
+    @property
+    @abc.abstractmethod
+    def name(self) -> str: ...
+
+    @property
+    @abc.abstractmethod
+    def output_size(self) -> int: ...
+
+
+class BaseEncoder(abc.ABC):
+    """Abstract base class for encoder modules."""
+
+    @abc.abstractmethod
+    def forward(
+        self,
+        symbols: data.PaddedTensor,
+        embeddings: nn.Embedding,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor: ...
 
     @property
     @abc.abstractmethod

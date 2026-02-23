@@ -95,7 +95,7 @@ class TransformerModule(base.BaseModule):
     def get_module(self) -> base.BaseModule: ...
 
 
-class TransformerEncoder(TransformerModule):
+class TransformerEncoder(TransformerModule, base.BaseEncoder):
     """Transformer encoder.
 
     Our implementation uses "pre-norm", i.e., it applies layer normalization
