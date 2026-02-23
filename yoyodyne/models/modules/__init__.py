@@ -1,6 +1,7 @@
 """Yoyodyne modules."""
 
 from .attention import Attention  # noqa: F401
+from .base import BaseEncoder  # noqa: F401
 from .base import BaseModule  # noqa: F401
 from .generation_probability import GenerationProbability  # noqa: F401
 from .hard_attention import ContextHardAttentionGRUDecoder  # noqa: F401
