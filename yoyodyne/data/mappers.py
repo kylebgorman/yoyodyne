@@ -69,7 +69,7 @@ class Mapper:
         return self._encode(symbols)
 
     def encode_target(self, symbols: Iterable[str]) -> torch.Tensor:
-        """Encodes a features string, padding with end tags.
+        """Encodes a features string, padding with end tag.
 
         Args:
             symbols (Iterable[str]).

@@ -40,9 +40,8 @@ class TransformerModel(base.BaseModel):
         self.classifier = nn.Linear(
             self.embedding_size, self.target_vocab_size
         )
-        if (
-            self.has_features_encoder
-            and self.source_encoder.output_size
+        if self.has_features_encoder and (
+            self.source_encoder.output_size
             != self.features_encoder.output_size
         ):
             raise base.ConfigurationError(
@@ -129,7 +128,7 @@ class TransformerModel(base.BaseModel):
             target = torch.cat((symbol, batch.target.tensor), dim=1)
             target_mask = torch.cat(
                 (
-                    torch.ones_like(symbol, dtype=bool),
+                    torch.zeros_like(symbol, dtype=bool),
                     batch.target.mask,
                 ),
                 dim=1,
@@ -152,7 +151,7 @@ class TransformerModel(base.BaseModel):
             embedding_size=self.embedding_size,
             hidden_size=self.decoder_hidden_size,
             layers=self.decoder_layers,
-            max_length=self.max_target_length,
+            max_length=self.max_target_length + 1,
             num_embeddings=self.num_embeddings,
             attention_heads=self.attention_heads,
         )

@@ -240,9 +240,7 @@ class HardAttentionRNNModel(base.BaseModel):
             encoded,
             batch.source.mask,
             target_length=(
-                batch.target.tensor.size(1)
-                if (self.training or self.validating)
-                else None
+                batch.target.tensor.size(1) if self.validating else None
             ),
         )
         if self.validating:

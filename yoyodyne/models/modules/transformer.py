@@ -3,7 +3,7 @@
 import abc
 import collections
 import math
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import torch
 from torch import nn
@@ -54,7 +54,8 @@ class TransformerModule(base.BaseModule):
         attention_heads (int, optional): number of attention heads.
         hidden_size (int, optional): size of the hidden layer.
         layers (int, optional): number of layers.
-        max_length (int, optional): max length for input.
+        max_length (int, optional): maximum length for positional encoding.
+            If not provided, one must call `set_max_length` before use.
         **kwargs: passed to superclass.
     """
 
@@ -62,7 +63,7 @@ class TransformerModule(base.BaseModule):
     esq: float
     hidden_size: int
     layers: int
-    module: nn.TransformerEncoder
+    module: Union[nn.TransformerEncoder, nn.TransformerDecoder]
     positional_encoding: position.PositionalEncoding
 
     def __init__(
@@ -71,7 +72,7 @@ class TransformerModule(base.BaseModule):
         attention_heads: int = defaults.ATTENTION_HEADS,
         hidden_size: int = defaults.HIDDEN_SIZE,
         layers: int = defaults.LAYERS,
-        max_length: int = defaults.MAX_LENGTH,
+        max_length: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -80,9 +81,8 @@ class TransformerModule(base.BaseModule):
         self.hidden_size = hidden_size
         self.layers = layers
         self.module = self.get_module()
-        self.positional_encoding = position.PositionalEncoding(
-            self.embedding_size, max_length
-        )
+        if max_length is not None:
+            self.set_max_length(max_length)
 
     def embed(
         self, symbols: torch.Tensor, embeddings: nn.Embedding
@@ -94,6 +94,17 @@ class TransformerModule(base.BaseModule):
     @abc.abstractmethod
     def get_module(self) -> base.BaseModule: ...
 
+    @property
+    def max_length(self) -> int:
+        return self.positional_encoding.max_length
+
+    def set_max_length(self, max_length: int) -> None:
+        # Overrides the default (no-op).
+        self.positional_encoding = position.PositionalEncoding(
+            self.embedding_size,
+            max_length,
+        )
+
 
 class TransformerEncoder(TransformerModule, base.BaseEncoder):
     """Transformer encoder.
@@ -101,6 +112,8 @@ class TransformerEncoder(TransformerModule, base.BaseEncoder):
     Our implementation uses "pre-norm", i.e., it applies layer normalization
     before attention. Because of this, we are not currently able to make use
     of PyTorch's nested tensor feature.
+
+    The caller is responsible for calling set_max_length.
 
     After:
         Xiong, R., Yang, Y., He, D., Zheng, K., Zheng, S., Xing, C., ..., and
