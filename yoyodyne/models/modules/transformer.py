@@ -505,7 +505,7 @@ class SeparateFeaturesTransformerDecoder(nn.TransformerDecoder):
         return output
 
 
-class TransformerPointerDecoder(TransformerDecoder):
+class PointerGeneratorTransformerDecoder(TransformerDecoder):
     """A transformer decoder which tracks the output of multihead attention.
 
     This is achieved with a hook into the forward pass.
@@ -636,3 +636,19 @@ class TransformerPointerDecoder(TransformerDecoder):
             return forward_orig(*args, **kwargs)
 
         attention_module.forward = wrap
+
+    @property
+    def name(self) -> str:
+        return "pointer-generator transformer"
+
+
+class DecoderOnlyTransformerDecoder(TransformerEncoder):
+    """Alias for the transformer encoder used in a decoder-only model.
+
+    This actually has the simpler semantics of a transformer encoder despite
+    its use as a decoder.
+    """
+
+    @property
+    def name(self) -> str:
+        return "decoder-only transformer"

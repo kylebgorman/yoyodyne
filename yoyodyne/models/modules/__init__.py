@@ -18,7 +18,8 @@ from .rnn import RNNState  # noqa: F401
 from .rnn import SoftAttentionGRUDecoder  # noqa: F401
 from .rnn import SoftAttentionLSTMDecoder  # noqa: F401
 from .transformer import AttentionOutput  # noqa: F401
+from .transformer import DecoderOnlyTransformerDecoder  # noqa: F401
 from .transformer import FeatureInvariantTransformerEncoder  # noqa: F401
+from .transformer import PointerGeneratorTransformerDecoder  # noqa: F401
 from .transformer import TransformerDecoder  # noqa: F401
 from .transformer import TransformerEncoder  # noqa: F401
-from .transformer import TransformerPointerDecoder  # noqa: F401

@@ -284,7 +284,7 @@ class DecoderOnlyTransformerModel(base.BaseModel):
         prefix_mask: torch.Tensor,
         predictions: torch.Tensor,
     ) -> torch.Tensor:
-        """Single decoder step for Prefix LM.
+        """Single decoder step.
 
         Args:
             prefix_padded (torch.Tensor).
@@ -323,7 +323,7 @@ class DecoderOnlyTransformerModel(base.BaseModel):
                 (prefix_padded, batch.features.padded), dim=1
             )
             prefix_mask = torch.cat((prefix_mask, batch.features.mask), dim=1)
-        if self.training and self.teacher_forcing:
+        if self.teacher_forcing and (self.training or self.validating):
             if not batch.has_target:
                 raise base.ConfigurationError(
                     "Teacher forcing requested but no target provided"
@@ -332,7 +332,7 @@ class DecoderOnlyTransformerModel(base.BaseModel):
             target_padded = torch.cat((symbol, batch.target.padded), dim=1)
             target_mask = torch.cat(
                 (
-                    torch.ones_like(symbol, dtype=bool),
+                    torch.zeros_like(symbol, dtype=bool),
                     batch.target.mask,
                 ),
                 dim=1,
@@ -370,7 +370,7 @@ class DecoderOnlyTransformerModel(base.BaseModel):
             # incorporate them here.
             #max_length=self.max_length,
             # FIXME I want this to be bigger.
-            max_length = self.max_target_length,
+            max_length=self.max_target_length,
         )
 
     def greedy_decode(
@@ -394,9 +394,7 @@ class DecoderOnlyTransformerModel(base.BaseModel):
             torch.Tensor: logits.
         """
         batch_size = prefix_padded.size(0)
-        # The output distributions to be returned.
         outputs = []
-        # The predicted symbols at each iteration.
         predictions = [self.start_symbol(batch_size).squeeze(1)]
         if target is None:
             max_num_steps = self.max_target_length
@@ -436,14 +434,14 @@ class DecoderOnlyTransformerModel(base.BaseModel):
             target_len (int).
 
         Returns:
-            torch.Tensor: float mask (0.0 for allowed, -inf for blocked).
+            torch.Tensor: float mask.
         """
         total_len = prefix_len + target_len
         mask = torch.zeros(
             (total_len, total_len), device=self.device, dtype=torch.float
         )
         # Prevents prefix from attending to target.
-        mask[:prefix_len, prefix_len:] = defaults.NEG_INF
+        mask[:prefix_len, prefix_len:] = defaults.NEG_EPSILON
         # Causally masks target.
         causal = nn.Transformer.generate_square_subsequent_mask(
             target_len, device=self.device
