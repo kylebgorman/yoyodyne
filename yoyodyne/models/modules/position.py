@@ -60,13 +60,7 @@ class PositionalEncoding(nn.Module):
         else:
             indices = torch.cumsum(~mask, dim=1) - 1
             indices.clamp_(min=0)
-        # FIXME
-        length = symbol.size(1)
-        assert (
-            length <= self.max_length
-        ), f"Symbol length {length} out of bounds (> {self.max_length})"
-        # /FIXME
-        # Selects the tensors from `out` at the specified indices.
+        # Selects the tensors at the specified indices.
         out = out[torch.arange(out.size(0)).unsqueeze(-1), indices]
         # Zeros out pads.
         out = out * symbol.ne(special.PAD_IDX).unsqueeze(2)
