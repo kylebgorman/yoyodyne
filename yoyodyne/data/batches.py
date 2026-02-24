@@ -4,7 +4,7 @@ Anything which has a tensor member should inherit from nn.Module, run the
 superclass constructor, and register the tensor as a buffer. This enables the
 Trainer to move them to the appropriate device."""
 
-from typing import Callable, List, Optional
+from typing import List, Optional
 
 import torch
 from torch import nn
@@ -22,8 +22,6 @@ class PaddedTensor(nn.Module):
 
     Args:
         tensorlist (List[torch.Tensor]): a list of tensors.
-        length_msg_callback (Callable[[int], None]): callback for handling a
-            violation of expected tensor length.
     """
 
     pad_idx: int
@@ -32,12 +30,9 @@ class PaddedTensor(nn.Module):
     def __init__(
         self,
         tensorlist: List[torch.Tensor],
-        length_msg_callback: Optional[Callable[[int], None]] = None,
     ):
         super().__init__()
         pad_len = max(len(tensor) for tensor in tensorlist)
-        if length_msg_callback is not None:
-            length_msg_callback(pad_len)
         self.register_buffer(
             "tensor",
             torch.stack(

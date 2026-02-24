@@ -69,10 +69,13 @@ class BaseModel(abc.ABC, lightning.LightningModule):
     decoder_hidden_size: int
     decoder_dropout: float
     label_smoothing: float
+    max_source_length: int
+    max_features_length: int
+    max_target_length: int
 
     # TODO(kbg): do decoder-only models with this nullability.
-    source_encoder: Optional[modules.BaseModule]
-    features_encoder: Optional[modules.BaseModule]
+    source_encoder: Optional[modules.BaseEncoder]
+    features_encoder: Optional[modules.BaseEncoder]
     decoder: modules.BaseModule
     embedding: nn.Embedding
 
@@ -94,12 +97,14 @@ class BaseModel(abc.ABC, lightning.LightningModule):
         decoder_layers: int = defaults.LAYERS,
         decoder_dropout: float = defaults.DROPOUT,
         embedding_size: int = defaults.EMBEDDING_SIZE,
-        features_encoder: Union[modules.BaseModule, bool] = False,
+        features_encoder: Union[modules.BaseEncoder, bool] = False,
         label_smoothing: float = defaults.LABEL_SMOOTHING,
+        max_source_length: int = defaults.MAX_LENGTH,
+        max_features_length: int = defaults.MAX_LENGTH,
         max_target_length: int = defaults.MAX_LENGTH,
         optimizer: cli.OptimizerCallable = defaults.OPTIMIZER,
         scheduler: cli.LRSchedulerCallable = defaults.SCHEDULER,
-        source_encoder: Optional[modules.BaseModule] = None,
+        source_encoder: Optional[modules.BaseEncoder] = None,
         target_vocab_size: int = -1,  # Dummy value filled in via link.
         vocab_size: int = -1,  # Dummy value filled in via link.
         **kwargs,  # Ignored here.
@@ -111,6 +116,8 @@ class BaseModel(abc.ABC, lightning.LightningModule):
         self.decoder_dropout = decoder_dropout
         self.embedding_size = embedding_size
         self.label_smoothing = label_smoothing
+        self.max_source_length = max_source_length
+        self.max_features_length = max_features_length
         self.max_target_length = max_target_length
         self.num_embeddings = vocab_size
         self.optimizer = optimizer
@@ -125,19 +132,24 @@ class BaseModel(abc.ABC, lightning.LightningModule):
         self.embeddings = self.init_embeddings(
             self.num_embeddings, self.embedding_size
         )
-        if source_encoder.embedding_size != self.embedding_size:
-            raise ConfigurationError(
-                "Source embedding size "
-                f"({source_encoder.embedding_size}) != "
-                "model embedding size "
-                f"({self.embedding_size})"
-            )
+        if source_encoder is not None:
+            if source_encoder.embedding_size != self.embedding_size:
+                raise ConfigurationError(
+                    "Source embedding size "
+                    f"({source_encoder.embedding_size}) != "
+                    f"model embedding size ({self.embedding_size})"
+                )
         self.source_encoder = source_encoder
         if features_encoder is False:
+            if self.source_encoder is not None:
+                self.source_encoder.set_max_length(self.max_source_length + 2)
             self.features_encoder = None
             self.has_features_encoder = False
         elif features_encoder is True:
-            # Shallow copy.
+            if self.source_encoder is not None:
+                self.source_encoder.set_max_length(
+                    max(self.max_source_length + 2, self.max_features_length)
+                )
             self.features_encoder = self.source_encoder
             self.has_features_encoder = True
         else:
@@ -145,10 +157,12 @@ class BaseModel(abc.ABC, lightning.LightningModule):
                 raise ConfigurationError(
                     "Features embedding size "
                     f"({features_encoder.embedding_size}) != "
-                    "model embedding size "
-                    f"({self.embedding_size})"
+                    f"model embedding size ({self.embedding_size})"
                 )
+            if self.source_encoder is not None:
+                self.source_encoder.set_max_length(self.max_source_length + 2)
             self.features_encoder = features_encoder
+            self.features_encoder.set_max_length(self.max_features_length)
             self.has_features_encoder = True
         self.loss_func = self._get_loss_func()
 
@@ -224,6 +238,43 @@ class BaseModel(abc.ABC, lightning.LightningModule):
             batch_size, 1
         )
 
+    def _align(
+        self, predictions: torch.Tensor, target: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Pads predictions and target tensors along sequence dimension.
+
+        This is useful for methods (e.g., student forcing training, or
+        prediction/testing) that require matched lengths.
+
+        Args:
+            predictions (torch.Tensor): B x C x L logits or B x L indices.
+            target (torch.Tensor): B X L indices.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor].
+        """
+        # Identifies which dimension represents the sequence length, and
+        # returns early if they're already aligned.
+        p_seq_dim = 2 if predictions.ndim == 3 else 1
+        p_len = predictions.size(p_seq_dim)
+        t_len = target.size(1)
+        if p_len == t_len:
+            return predictions, target
+        max_len = max(p_len, t_len)
+        # Pad predictions along the sequence dimension.
+        if p_len < max_len:
+            # For logits, padding with 0 is neutral; for indices use PAD_IDX.
+            pad_val = 0 if predictions.ndim == 3 else special.PAD_IDX
+            predictions = nn.functional.pad(
+                predictions, (0, max_len - p_len), value=pad_val
+            )
+        # Pads target along the sequence dimension.
+        elif t_len < max_len:
+            target = nn.functional.pad(
+                target, (0, max_len - t_len), value=special.PAD_IDX
+            )
+        return predictions, target
+
     def on_fit_start(self):
         # Rather than crashing, we simply warn about lack of deterministic
         # algorithms.
@@ -267,7 +318,8 @@ class BaseModel(abc.ABC, lightning.LightningModule):
             torch.Tensor: training loss.
         """
         predictions = self(batch)
-        loss = self.loss_func(predictions, batch.target.tensor)
+        predictions, target = self._align(predictions, batch.target.tensor)
+        loss = self.loss_func(predictions, target)
         self.log(
             "train_loss",
             loss,
@@ -296,7 +348,8 @@ class BaseModel(abc.ABC, lightning.LightningModule):
             predictions, _ = self(batch)
         else:
             predictions = torch.argmax(self(batch), dim=1)
-        self._update_metrics(predictions, batch.target.tensor)
+        predictions, target = self._align(predictions, batch.target.tensor)
+        self._update_metrics(predictions, target)
 
     def on_test_epoch_end(self) -> None:
         self._log_metrics_on_epoch_end("test")
@@ -318,7 +371,8 @@ class BaseModel(abc.ABC, lightning.LightningModule):
             batch_idx (int).
         """
         predictions = self(batch)
-        loss = self.loss_func(predictions, batch.target.tensor)
+        predictions, target = self._align(predictions, batch.target.tensor)
+        loss = self.loss_func(predictions, target)
         self.log(
             "val_loss",
             loss,
@@ -327,7 +381,7 @@ class BaseModel(abc.ABC, lightning.LightningModule):
             on_epoch=True,
             prog_bar=True,
         )
-        self._update_metrics(predictions, batch.target.tensor)
+        self._update_metrics(predictions, target)
 
     def on_validation_epoch_end(self) -> None:
         self._log_metrics_on_epoch_end("val")

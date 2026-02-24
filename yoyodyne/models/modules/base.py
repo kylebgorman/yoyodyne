@@ -46,8 +46,8 @@ class BaseModule(abc.ABC, lightning.LightningModule):
     def output_size(self) -> int: ...
 
 
-class BaseEncoder(abc.ABC):
-    """Abstract base class for encoder modules."""
+class BaseEncoder(BaseModule):
+    """Base class for encoder modules."""
 
     @abc.abstractmethod
     def forward(
@@ -58,10 +58,15 @@ class BaseEncoder(abc.ABC):
         **kwargs,
     ) -> torch.Tensor: ...
 
-    @property
-    @abc.abstractmethod
-    def name(self) -> str: ...
+    def set_max_length(self, max_length: int) -> None:
+        """Sets maximum input length.
 
-    @property
-    @abc.abstractmethod
-    def output_size(self) -> int: ...
+        This is no-op by default. Encoders with positional encodings (e.g.,
+        transformers) should override this to resize their positional encoding
+        table. This is called by BaseModel after encoders are injected, since
+        the correct length is only known at that point.
+
+        Args:
+            max_length (int).
+        """
+        pass

@@ -1,2 +1,4 @@
 batch_size: 100
 target_sep: " "
+max_source_length: 32
+max_target_length: 32
