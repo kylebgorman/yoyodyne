@@ -10,24 +10,17 @@ from . import base, embeddings, modules
 class TransformerModel(base.BaseModel):
     """Vanilla transformer model.
 
-        If features are provided, the encodings are fused by concatenation of the
-        features encoding with the source encoding on the sequence length
-        dimension.
+    If features are provided, the encodings are fused by concatenation of the
+    features encoding with the source encoding on the sequence length
+    dimension.
 
-    <<<<<<< HEAD
-        After:
-            Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez,
-            A. N., Łukasz, K., and Polosukhin, I. 2017. Attention is all you need.
-            In Advances in Neural Information Processing Systems 30, 5998-6008.
-    =======
-        This supports optional student forcing during training.
-    >>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
+    This supports optional student-forcing during training.
 
-        Args:
-            *args: passed to superclass.
-            attention_heads (int, optional).
-            teacher_forcing (bool, optional).
-            **kwargs: passed to superclass.
+    Args:
+        *args: passed to superclass.
+        attention_heads (int, optional).
+        teacher_forcing (bool, optional).
+        **kwargs: passed to superclass.
     """
 
     # Model arguments.
@@ -169,7 +162,7 @@ class TransformerModel(base.BaseModel):
     ) -> torch.Tensor:
         """Decodes the output sequence greedily.
 
-        This performs student forcing.
+        This performs student-forcing.
 
         Args:
             encoded (torch.Tensor).
@@ -261,45 +254,48 @@ class DecoderOnlyTransformerModel(base.BaseModel):
         teacher_forcing: bool = defaults.TEACHER_FORCING,
         **kwargs,
     ):
-        self.attention_heads = attention_heads
         super().__init__(
             source_encoder=None,
             features_encoder=False,
             *args,
             **kwargs,
         )
+        self.attention_heads = attention_heads
         self.teacher_forcing = teacher_forcing
         self.classifier = nn.Linear(
             self.embedding_size, self.target_vocab_size
         )
+        self.decoder = self.get_decoder()
+        self._log_model()
+        self.save_hyperparameters(
+            ignore=[
+                "classifier",
+                "decoder",
+                "embeddings",
+            ]
+        )
 
     def decode_step(
         self,
-        prefix_padded: torch.Tensor,
-        prefix_mask: torch.Tensor,
+        prefix: torch.Tensor,
         predictions: torch.Tensor,
     ) -> torch.Tensor:
         """Single decoder step.
 
         Args:
-            prefix_padded (torch.Tensor).
-            prefix_mask (torch.Tensor).
+            prefix (torch.Tensor).
             predictions (torch.Tensor): tensor of predictions thus far.
 
         Returns:
             torch.Tensor: logits.
         """
-        prefix_len = prefix_padded.size(1)
+        sequence = torch.cat((prefix, predictions), dim=1)
+        tensor = data.PaddedTensor.from_tensor(sequence)
+        prefix_len = prefix.size(1)
         target_len = predictions.size(1)
-        sequence = torch.cat((prefix_padded, predictions), dim=1)
-        target_mask = torch.ones_like(predictions, dtype=bool)
-        padding_mask = torch.cat((prefix_mask, target_mask), dim=1)
         attn_mask = self._get_prefix_mask(prefix_len, target_len)
-        # We wrap the concatenated sequence in a PaddedTensor.
-        tensor = data.PaddedTensor(sequence, padding_mask)
         decoded = self.decoder(tensor, self.embeddings, mask=attn_mask)
-        logits = self.classifier(decoded)
-        return logits[:, :, :-1]  # Ignores END.
+        return self.classifier(decoded[:, -1, :])
 
     def forward(self, batch: data.Batch) -> torch.Tensor:
         """Forward pass.
@@ -311,104 +307,69 @@ class DecoderOnlyTransformerModel(base.BaseModel):
             torch.Tensor.
         """
         batch_size = len(batch)
-        prefix_padded = batch.source.padded
-        prefix_mask = batch.source.mask
+        prefix = batch.source.tensor
         if batch.has_features:
-            prefix_padded = torch.cat(
-                (prefix_padded, batch.features.padded), dim=1
-            )
-            prefix_mask = torch.cat((prefix_mask, batch.features.mask), dim=1)
-        if self.teacher_forcing and (self.training or self.validating):
+            prefix = torch.cat((prefix, batch.features.tensor), dim=1)
+        if (self.training or self.validating) and self.teacher_forcing:
             if not batch.has_target:
                 raise base.ConfigurationError(
                     "Teacher forcing requested but no target provided"
                 )
             symbol = self.start_symbol(batch_size)
-            target_padded = torch.cat((symbol, batch.target.padded), dim=1)
-            target_mask = torch.cat(
-                (
-                    torch.zeros_like(symbol, dtype=bool),
-                    batch.target.mask,
-                ),
-                dim=1,
-            )
-            sequence = torch.cat((prefix_padded, target_padded), dim=1)
-            padding_mask = torch.cat((prefix_mask, target_mask), dim=1)
-            prefix_len = prefix_padded.size(1)
-            target_len = target_padded.size(1)
+            target = torch.cat((symbol, batch.target.tensor), dim=1)
+            sequence = torch.cat((prefix, target), dim=1)
+            tensor = data.PaddedTensor.from_tensor(sequence)
+            prefix_len = prefix.size(1)
+            target_len = target.size(1)
             attn_mask = self._get_prefix_mask(prefix_len, target_len)
-            # We wrap the concatenated sequence in a PaddedTensor.
-            tensor = data.PaddedTensor(sequence, padding_mask)
-            # We only need the prediction portion.
-            decoded = self.decoder(tensor, self.embeddings, mask=attn_mask)[
-                :, prefix_len:, :
-            ]
-            logits = self.classifier(decoded).transpose(1, 2)
+            decoded = self.decoder(tensor, self.embeddings, mask=attn_mask)
+            logits = self.classifier(decoded[:, prefix_len:, :]).transpose(
+                1, 2
+            )
             return logits[:, :, :-1]  # Ignores END.
         else:
-            return self.greedy_decode(
-                prefix_padded,
-                prefix_mask,
-                batch.target.padded if batch.has_target else None,
-            )
+            return self.greedy_decode(prefix)
 
-    def get_decoder(self) -> modules.TrasnformerEncoder:
-        # We use modules.TransformerEncoder as the underlying stack because
-        # it has the necesssary self-attention layers only.
-        return modules.TransformerEncoder(
+    def get_decoder(self) -> modules.DecoderOnlyTransformerDecoder:
+        return modules.DecoderOnlyTransformerDecoder(
             attention_heads=self.attention_heads,
             dropout=self.decoder_dropout,
             embedding_size=self.embedding_size,
             hidden_size=self.decoder_hidden_size,
             layers=self.decoder_layers,
-            # Source and features now count towards "target length", so we
-            # incorporate them here.
-            # max_length=self.max_length,
-            # FIXME I want this to be bigger.
-            max_length=self.max_target_length,
+            max_length=self.max_length,
         )
 
-    def greedy_decode(
-        self,
-        prefix_padded: torch.Tensor,
-        prefix_mask: torch.Tensor,
-        target: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+    def greedy_decode(self, prefix: torch.Tensor) -> torch.Tensor:
         """Decodes the output sequence greedily.
+
+        This performs student-forcing.
 
         Since this is a single stack without a separate encoder, we must
         feed the growing sequence (prefix + predicted target) into the model
         at each step.
 
         Args:
-            prefix_padded (torch.Tensor).
-            prefix_mask (torch.Tensor).
-            target (torch.Tensor, optional): target symbols.
+            prefix (torch.Tensor).
 
         Returns:
             torch.Tensor: logits.
         """
-        batch_size = prefix_padded.size(0)
+        batch_size = prefix.size(0)
         outputs = []
         predictions = [self.start_symbol(batch_size).squeeze(1)]
-        if target is None:
-            max_num_steps = self.max_target_length
-            final = torch.zeros(batch_size, device=self.device, dtype=bool)
-        else:
-            max_num_steps = target.size(1)
-        for _ in range(max_num_steps):
+        final = torch.zeros(batch_size, device=self.device, dtype=bool)
+        for _ in range(self.max_target_length):
             logits = self.decode_step(
-                prefix_padded,
-                prefix_mask,
+                prefix,
                 torch.stack(predictions, dim=1),
             )
             outputs.append(logits)
             symbol = torch.argmax(logits, dim=1)
             predictions.append(symbol)
-            if target is None:
-                final = torch.logical_or(final, (symbol == special.END_IDX))
-                if final.all():
-                    break
+            final = torch.logical_or(final, (symbol == special.END_IDX))
+            if final.all():
+                break
         outputs = torch.stack(outputs, dim=2)
         return outputs
 
@@ -436,12 +397,13 @@ class DecoderOnlyTransformerModel(base.BaseModel):
             (total_len, total_len), device=self.device, dtype=torch.float
         )
         # Prevents prefix from attending to target.
-        mask[:prefix_len, prefix_len:] = defaults.NEG_EPSILON
+        mask[:prefix_len, prefix_len:] = defaults.NEG_INF
         # Causally masks target.
-        causal = nn.Transformer.generate_square_subsequent_mask(
-            target_len, device=self.device
+        mask[prefix_len:, prefix_len:] = (
+            nn.Transformer.generate_square_subsequent_mask(
+                target_len, device=self.device
+            )
         )
-        mask[prefix_len:, prefix_len:] = causal
         return mask
 
     def init_embeddings(
@@ -451,16 +413,16 @@ class DecoderOnlyTransformerModel(base.BaseModel):
 
     @property
     def max_length(self) -> int:
-        # Both source and features now count towards "target length", so we
-        # incorporate them here.
-        if self.has_features_encoder:
-            return (
-                self.max_source_length
-                + self.max_features_length
-                + self.max_target_length
-            )
-        else:
-            return self.max_source_length + self.max_target_length
+        # Source (plus START/END) plus features plus target (plus START/END).
+        # The positional will be oversized if there are no features, but I
+        # believe this is harmless.
+        return (
+            self.max_source_length
+            + 2
+            + self.max_features_length
+            + self.max_target_length
+            + 2
+        )
 
     @property
     def name(self) -> str:

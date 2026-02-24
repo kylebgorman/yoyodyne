@@ -126,7 +126,6 @@ class TransformerEncoder(TransformerModule, base.BaseEncoder):
         self,
         symbols: data.PaddedTensor,
         embeddings: nn.Embedding,
-        mask: Optional[torch.Tensor] = None,
         *args,
         **kwargs,
     ) -> torch.Tensor:
@@ -135,7 +134,6 @@ class TransformerEncoder(TransformerModule, base.BaseEncoder):
         Args:
             symbols (data.PaddedTensor).
             embeddings (nn.Embedding).
-            mask (torch.Tensor, optional): attention mask.
             *args: ignored.
             **kwargs: ignored.
 
@@ -657,11 +655,38 @@ class PointerGeneratorTransformerDecoder(TransformerDecoder):
 
 
 class DecoderOnlyTransformerDecoder(TransformerEncoder):
-    """Alias for the transformer encoder used in a decoder-only model.
+    """Decoder for the decoder-only model.
 
-    This actually has the simpler semantics of a transformer encoder despite
-    its use as a decoder.
+    This is, however, more similar to the transformer encoder despite its use
+    as a decoder.
     """
+
+    def forward(
+        self,
+        symbols: data.PaddedTensor,
+        embeddings: nn.Embedding,
+        mask: torch.Tensor,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Encodes the symbols.
+
+        This overrides the superclass definition to take a mask argument.
+
+        Args:
+            symbols (data.PaddedTensor).
+            embeddings (nn.Embedding).
+            mask (torch.Tensor).
+            *args: ignored.
+            **kwargs: ignored.
+
+        Returns:
+            torch.Tensor: sequence of encoded symbols.
+        """
+        embedded = self.embed(symbols.tensor, embeddings)
+        return self.module(
+            embedded, mask=mask, src_key_padding_mask=symbols.mask
+        )
 
     @property
     def name(self) -> str:

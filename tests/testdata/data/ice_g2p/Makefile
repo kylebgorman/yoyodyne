@@ -9,6 +9,8 @@ all: train.tsv \
 	context_hard_attention_lstm_expected.txt \
 	decoder_only_transformer_expected.test \
 	decoder_only_transformer_expected.txt \
+	decoder_only_transformer_student_forcing_expected.test \
+	decoder_only_transformer_student_forcing_expected.txt \
 	gru_expected.test \
 	gru_expected.txt \
 	hard_attention_gru_expected.test \

@@ -4,6 +4,7 @@ Anything which has a tensor member should inherit from nn.Module, run the
 superclass constructor, and register the tensor as a buffer. This enables the
 Trainer to move them to the appropriate device."""
 
+from __future__ import annotations
 from typing import List, Optional
 
 import torch
@@ -39,6 +40,14 @@ class PaddedTensor(nn.Module):
                 [self.pad_tensor(tensor, pad_len) for tensor in tensorlist],
             ),
         )
+
+    @classmethod
+    def from_tensor(cls, tensor: torch.Tensor) -> PaddedTensor:
+        """Wraps an already-padded 2D tensor."""
+        obj = cls.__new__(cls)
+        nn.Module.__init__(obj)
+        obj.register_buffer("tensor", tensor)
+        return obj
 
     @property
     def mask(self) -> torch.Tensor:

@@ -24,6 +24,8 @@ REAL_TRAINER_CONFIG_PATH = os.path.join(CONFIG_DIR, "real_trainer.yaml")
 ARCH = [
     "context_hard_attention_gru",
     "context_hard_attention_lstm",
+    "decoder_only_transformer",
+    "decoder_only_transformer_student_forcing",
     "gru",
     "hard_attention_gru",
     "hard_attention_lstm",
@@ -42,6 +44,7 @@ ARCH = [
 ]
 INFLECTION_ARCH = [
     "context_hard_attention_lstm_separate_features",
+    "decoder_only_transformer_shared_features",
     "hard_attention_lstm_separate_features",
     "pointer_generator_lstm_separate_features",
     "soft_attention_lstm_gru_features",

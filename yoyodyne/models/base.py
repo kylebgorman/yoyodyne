@@ -89,7 +89,6 @@ class BaseModel(abc.ABC, lightning.LightningModule):
 
     def __init__(
         self,
-        source_encoder: Optional[modules.BaseModule] = None,
         *args,  # Ignored here.
         beam_width: int = defaults.BEAM_WIDTH,
         compute_accuracy: bool = True,
