@@ -220,14 +220,14 @@ class TransformerModel(base.BaseModel):
 class DecoderOnlyTransformerModel(base.BaseModel):
     """Decoder-only transformer model.
 
-    This implements the "prefix LM" architecture in which there is no separate
-    encoder, and cross-attention is replaced by full attention across the
-    concatenated source and target sequence, with a mask such that the "prefix"
-    (the source and features) are fully visible to itself, and the target is
-    causally masked (i.e., can only see the prefix and earlier target symbols).
-    Since this is a decoder-only architecture, it is not compatible with source
-    or features encoders. Given that the source and features contribute to
-    max_target_length, one is strongly encouraged to increase this value.
+    This implements the decoder-only ("prefix LM") transformer architecture in
+    which there is no separate encoder, and cross-attention is replaced by
+    full attention across the concatenated source and target sequence, with
+    masking so the "prefix" (the source and features) are fully self-visible,
+    but the target is causally masked (i.e., can only see the prefix and
+    earlier target symbols).
+
+    This is not compatible with source or features encoders.
 
     After:
         Raffel, C., Shazeer, N., Roberts, A., Lee, K., Narang, S., Matena, M.,
@@ -254,6 +254,14 @@ class DecoderOnlyTransformerModel(base.BaseModel):
         teacher_forcing: bool = defaults.TEACHER_FORCING,
         **kwargs,
     ):
+        if kwargs.get("source_encoder") is not None:
+            raise base.ConfigurationError(
+                f"{self.__class__.__name__} does not support source encoders"
+            )
+        if kwargs.get("features_encoder", False) is not False:
+            raise base.ConfigurationError(
+                f"{self.__class__.__name__} does not support features encoders"
+            )
         super().__init__(
             source_encoder=None,
             features_encoder=False,
@@ -291,9 +299,9 @@ class DecoderOnlyTransformerModel(base.BaseModel):
         """
         sequence = torch.cat((prefix, predictions), dim=1)
         tensor = data.PaddedTensor.from_tensor(sequence)
-        prefix_len = prefix.size(1)
-        target_len = predictions.size(1)
-        attn_mask = self._get_prefix_mask(prefix_len, target_len)
+        prefix_length = prefix.size(1)
+        target_length = predictions.size(1)
+        attn_mask = self._get_prefix_mask(prefix_length, target_length)
         decoded = self.decoder(tensor, self.embeddings, mask=attn_mask)
         return self.classifier(decoded[:, -1, :])
 
@@ -311,19 +319,14 @@ class DecoderOnlyTransformerModel(base.BaseModel):
         if batch.has_features:
             prefix = torch.cat((prefix, batch.features.tensor), dim=1)
         if (self.training or self.validating) and self.teacher_forcing:
-            if not batch.has_target:
-                raise base.ConfigurationError(
-                    "Teacher forcing requested but no target provided"
-                )
             symbol = self.start_symbol(batch_size)
-            target = torch.cat((symbol, batch.target.tensor), dim=1)
-            sequence = torch.cat((prefix, target), dim=1)
+            sequence = torch.cat((prefix, symbol, batch.target.tensor), dim=1)
             tensor = data.PaddedTensor.from_tensor(sequence)
-            prefix_len = prefix.size(1)
-            target_len = target.size(1)
-            attn_mask = self._get_prefix_mask(prefix_len, target_len)
+            prefix_length = prefix.size(1)
+            target_length = batch.target.tensor.size(1) + 1
+            attn_mask = self._get_prefix_mask(prefix_length, target_length)
             decoded = self.decoder(tensor, self.embeddings, mask=attn_mask)
-            logits = self.classifier(decoded[:, prefix_len:, :]).transpose(
+            logits = self.classifier(decoded[:, prefix_length:, :]).transpose(
                 1, 2
             )
             return logits[:, :, :-1]  # Ignores END.
@@ -374,34 +377,34 @@ class DecoderOnlyTransformerModel(base.BaseModel):
         return outputs
 
     def _get_prefix_mask(
-        self, prefix_len: int, target_len: int
+        self, prefix_length: int, target_length: int
     ) -> torch.Tensor:
         """Generates the prefix LM attention mask.
 
-        Mask shape is L x L where L = prefix_len + target_len.
+        Mask shape is L x L where L = prefix_length + target_length.
 
-        * Prefix tokens can attend to any prefix token but to no
+        * Prefix tokens can attend to any prefix token but not to
           target tokens.
-        * Target tokens can attend to any prefix token but to only
+        * Target tokens can attend to any prefix token but only to
           earlier target tokens ("causal masking").
 
         Args:
-            prefix_len (int).
-            target_len (int).
+            prefix_length (int).
+            target_length (int).
 
         Returns:
             torch.Tensor: float mask.
         """
-        total_len = prefix_len + target_len
+        total_length = prefix_length + target_length
         mask = torch.zeros(
-            (total_len, total_len), device=self.device, dtype=torch.float
+            (total_length, total_length), device=self.device, dtype=torch.float
         )
         # Prevents prefix from attending to target.
-        mask[:prefix_len, prefix_len:] = defaults.NEG_INF
+        mask[:prefix_length, prefix_length:] = defaults.NEG_INF
         # Causally masks target.
-        mask[prefix_len:, prefix_len:] = (
+        mask[prefix_length:, prefix_length:] = (
             nn.Transformer.generate_square_subsequent_mask(
-                target_len, device=self.device
+                target_length, device=self.device
             )
         )
         return mask

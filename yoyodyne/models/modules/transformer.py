@@ -684,8 +684,16 @@ class DecoderOnlyTransformerDecoder(TransformerEncoder):
             torch.Tensor: sequence of encoded symbols.
         """
         embedded = self.embed(symbols.tensor, embeddings)
+        # Casts this to float.
+        padding_mask = torch.where(
+            symbols.mask,
+            torch.full_like(symbols.mask, defaults.NEG_INF, dtype=torch.float),
+            torch.zeros_like(symbols.mask, dtype=torch.float),
+        )
         return self.module(
-            embedded, mask=mask, src_key_padding_mask=symbols.mask
+            embedded,
+            mask=mask,
+            src_key_padding_mask=padding_mask,
         )
 
     @property

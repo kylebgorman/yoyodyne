@@ -32,9 +32,15 @@ class BaseModel(abc.ABC, lightning.LightningModule):
     * Evaluation metrics are tracked by test_step; nothing is returned.
     * Validation loss and evaluation metrics are tracked by validation_step;
       nothing is returned.
-    * If a source encoder is specified and features_encoder is True, the
-      source encoder will be reused as the features encoder; if False (the
-      default), no features encoder will be used.
+
+    The source_encoder argument uses a two-way sentinel system: None means
+    no source_encoder is used; a BaseEncoder instance is used as a source
+    encoder.
+
+    The features_encoder argument uses a three-way sentinel system: False
+    means no features encoder; True indicates that the source encoder is reused
+    as the features encoder; a BaseEncoder instance is used as a separate
+    features encoder.
 
     Derived classes should call the superclass init and then issue:
 
@@ -50,7 +56,6 @@ class BaseModel(abc.ABC, lightning.LightningModule):
         )
 
     Args:
-        source_encoder (modules.BaseModule, optional).
         *args: ignored.
         beam_width (int,  optional): width of beam for decoding.
         compute_accuracy (bool, optional): compute accuracy?
