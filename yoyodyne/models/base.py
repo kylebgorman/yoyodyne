@@ -50,14 +50,11 @@ class BaseModel(abc.ABC, lightning.LightningModule):
         )
 
     Args:
-<<<<<<< HEAD
         source_encoder (modules.BaseModule, optional).
-=======
         *args: ignored.
         beam_width (int,  optional): width of beam for decoding.
         compute_accuracy (bool, optional): compute accuracy?
         compute_ser (bool, optional): compute SER?
->>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
         decoder_hidden_size (int, optional): dimensionality of decoder layers.
         decoder_layers (int, optional): number of decoder layers.
         decoder_dropout (float, optional): dropout probability.
@@ -73,22 +70,12 @@ class BaseModel(abc.ABC, lightning.LightningModule):
     decoder_hidden_size: int
     decoder_dropout: float
     label_smoothing: float
-<<<<<<< HEAD
-    optimizer: optim.Optimizer
-    scheduler: optim.lr_scheduler.LRScheduler
-    source_encoder: Optional[modules.BaseModule]
-    features_encoder: Optional[modules.BaseModule]
-    accuracy: Optional[metrics.Accuracy]
-    ser: Optional[metrics.SER]
-=======
     max_source_length: int
     max_features_length: int
     max_target_length: int
 
-    # TODO(kbg): do decoder-only models with this nullability.
     source_encoder: Optional[modules.BaseEncoder]
     features_encoder: Optional[modules.BaseEncoder]
->>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
     decoder: modules.BaseModule
     embedding: nn.Embedding
 
@@ -102,10 +89,7 @@ class BaseModel(abc.ABC, lightning.LightningModule):
 
     def __init__(
         self,
-<<<<<<< HEAD
         source_encoder: Optional[modules.BaseModule] = None,
-=======
->>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
         *args,  # Ignored here.
         beam_width: int = defaults.BEAM_WIDTH,
         compute_accuracy: bool = True,
@@ -149,19 +133,6 @@ class BaseModel(abc.ABC, lightning.LightningModule):
         self.embeddings = self.init_embeddings(
             self.num_embeddings, self.embedding_size
         )
-<<<<<<< HEAD
-        self.source_encoder = source_encoder
-        if (
-            self.source_encoder is not None
-            and self.source_encoder.embedding_size != self.embedding_size
-        ):
-            raise ConfigurationError(
-                "Source embedding size "
-                f"({self.source_encoder.embedding_size}) != "
-                "model embedding size "
-                f"({self.embedding_size})"
-            )
-=======
         if source_encoder is not None:
             if source_encoder.embedding_size != self.embedding_size:
                 raise ConfigurationError(
@@ -170,25 +141,16 @@ class BaseModel(abc.ABC, lightning.LightningModule):
                     f"model embedding size ({self.embedding_size})"
                 )
         self.source_encoder = source_encoder
->>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
         if features_encoder is False:
             if self.source_encoder is not None:
                 self.source_encoder.set_max_length(self.max_source_length + 2)
             self.features_encoder = None
             self.has_features_encoder = False
         elif features_encoder is True:
-<<<<<<< HEAD
-            if self.source_encdoer is None:
-                raise ConfigurationError(
-                    "Shared features_encoder requires a valid source_encoder"
-                )
-            # Shallow copy.
-=======
             if self.source_encoder is not None:
                 self.source_encoder.set_max_length(
                     max(self.max_source_length + 2, self.max_features_length)
                 )
->>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
             self.features_encoder = self.source_encoder
             self.has_features_encoder = True
         else:

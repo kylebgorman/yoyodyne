@@ -142,15 +142,8 @@ class TransformerEncoder(TransformerModule, base.BaseEncoder):
         Returns:
             torch.Tensor: sequence of encoded symbols.
         """
-<<<<<<< HEAD
-        embedded = self.embed(symbols.padded, embeddings)
-        return self.module(
-            embedded, src_key_padding_mask=symbols.mask, mask=mask
-        )
-=======
         embedded = self.embed(symbols.tensor, embeddings)
         return self.module(embedded, src_key_padding_mask=symbols.mask)
->>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
 
     def get_module(self) -> nn.TransformerEncoder:
         encoder_layer = nn.TransformerEncoderLayer(
@@ -661,7 +654,6 @@ class PointerGeneratorTransformerDecoder(TransformerDecoder):
     @property
     def name(self) -> str:
         return "pointer-generator transformer"
-<<<<<<< HEAD
 
 
 class DecoderOnlyTransformerDecoder(TransformerEncoder):
@@ -674,5 +666,3 @@ class DecoderOnlyTransformerDecoder(TransformerEncoder):
     @property
     def name(self) -> str:
         return "decoder-only transformer"
-=======
->>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
