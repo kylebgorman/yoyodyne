@@ -39,7 +39,7 @@ test.tsv:
 
 %_expected.test %_expected.txt: train.tsv dev.tsv test.tsv ../../configs/%.yaml
 	$(eval TMPDIR := $(shell mktemp -d))
-	yoyodyne \
+	CUDA_LAUNCH_BLOCKING=1 yoyodyne \
         fit \
         --checkpoint ../../configs/checkpoint.yaml \
         --data ../../configs/tur_inflection_data.yaml \

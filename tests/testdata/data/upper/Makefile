@@ -23,6 +23,8 @@ all: train.tsv \
 	pointer_generator_lstm_student_forcing_expected.txt \
 	pointer_generator_transformer_expected.test \
 	pointer_generator_transformer_expected.txt \
+	pointer_generator_transformer_student_forcing_expected.test \
+	pointer_generator_transformer_student_forcing_expected.txt \
 	soft_attention_gru_expected.test \
 	soft_attention_gru_expected.txt \
 	soft_attention_lstm_expected.test \

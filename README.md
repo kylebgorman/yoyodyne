@@ -290,8 +290,8 @@ poorly and are present only for historical reasons.
 
 Teacher-forcing is the default during training, but most models also support
 student-forcing training. When using student-forcing with transformer models,
-it is important to set the model `max_target_length` to a value appropriate
-for your data to avoid unnecessary attention computations, which are quadratic
+it is important to set `data: max_target_length` to a value appropriate for
+your data to avoid unnecessary attention computations, which are quadratic
 in the maximum target length.
 
 #### Optimization
