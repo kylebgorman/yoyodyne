@@ -55,9 +55,8 @@ Then, optionally install additional dependencies for developers and testers:
 Yoyodyne is also compatible with [Google
 Colab](https://colab.research.google.com/) GPU runtimes.
 
-1.  Click "Runtime" \> "Change Runtime Type".
-2.  In the dialogue box, under the "Hardware accelerator" dropdown box, select
-    "GPU", then click "Save".
+1.  Click "Runtime" \> "Change runtime type".
+2.  Under the "Hardware accelerator", select a "GPU", then click "Save".
 3.  You may be prompted to delete the old runtime. Do so if you wish.
 4.  Then install and run using the `!` as a prefix to shell commands.
 
@@ -282,6 +281,14 @@ poorly and are present only for historical reasons.
 - `yoyodyne.models.LSTMModel`: the same as `yoyodyne.models.GRUModel` but with
   an LSTM decoder instead. This is most commonly used with
   `yoyodyne.models.modules.LSTMEncoder`s.
+
+#### Teacher- and student-forcing
+
+Teacher-forcing is the default during training, but most models also support
+student-forcing training. When using student-forcing with transformer models,
+it is important to set `data: max_target_length` to a value appropriate for
+your data to avoid unnecessary attention computations, which are quadratic
+in the maximum target length.
 
 #### Optimization
 

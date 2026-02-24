@@ -1,2 +1,5 @@
 batch_size: 100
 features_col: 3
+max_source_length: 64
+max_features_length: 32
+max_target_length: 64

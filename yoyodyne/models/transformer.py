@@ -1,7 +1,5 @@
 """Transformer model classes."""
 
-from typing import Optional
-
 import torch
 from torch import nn
 
@@ -16,16 +14,19 @@ class TransformerModel(base.BaseModel):
     features encoding with the source encoding on the sequence length
     dimension.
 
+<<<<<<< HEAD
     After:
         Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez,
         A. N., Łukasz, K., and Polosukhin, I. 2017. Attention is all you need.
         In Advances in Neural Information Processing Systems 30, 5998-6008.
+=======
+    This supports optional student forcing during training.
+>>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
 
     Args:
         *args: passed to superclass.
         attention_heads (int, optional).
-        teacher_forcing (bool, optional): should teacher (rather than student)
-            forcing be used?
+        teacher_forcing (bool, optional).
         **kwargs: passed to superclass.
     """
 
@@ -41,15 +42,13 @@ class TransformerModel(base.BaseModel):
         teacher_forcing: bool = defaults.TEACHER_FORCING,
         **kwargs,
     ):
-        self.attention_heads = attention_heads
         super().__init__(*args, **kwargs)
-        self.teacher_forcing = teacher_forcing
+        self.attention_heads = attention_heads
         self.classifier = nn.Linear(
             self.embedding_size, self.target_vocab_size
         )
-        if (
-            self.has_features_encoder
-            and self.source_encoder.output_size
+        if self.has_features_encoder and (
+            self.source_encoder.output_size
             != self.features_encoder.output_size
         ):
             raise base.ConfigurationError(
@@ -57,6 +56,18 @@ class TransformerModel(base.BaseModel):
                 f"({self.source_encoder.output_size}) and features "
                 f"encoding ({self.features_encoder.output_size})"
             )
+        self.decoder = self.get_decoder()
+        self.teacher_forcing = teacher_forcing
+        self._log_model()
+        self.save_hyperparameters(
+            ignore=[
+                "classifier",
+                "decoder",
+                "embeddings",
+                "features_encoder",
+                "source_encoder",
+            ]
+        )
 
     def decode_step(
         self,
@@ -79,10 +90,15 @@ class TransformerModel(base.BaseModel):
         decoded, _ = self.decoder(
             encoded, mask, predictions, None, self.embeddings
         )
+<<<<<<< HEAD
         # FIXME am I running too much classifier? It seems like I only need
         # to run it over the last decoded symbol.
         logits = self.classifier(decoded)
         return logits[:, -1, :]
+=======
+        # We only need the logits for the most recent time step.
+        return self.classifier(decoded[:, -1, :])
+>>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
 
     def forward(self, batch: data.Batch) -> torch.Tensor:
         """Forward pass.
@@ -94,22 +110,24 @@ class TransformerModel(base.BaseModel):
             torch.Tensor.
 
         Raises:
-            base.ConfigurationError: Features encoder specified but no feature
-                column specified.
-            base.ConfigurationError: Features column specified but no feature
+            base.ConfigurationError: Features column specified but no features
                 encoder specified.
-            base.ConfigurationError: Teacher forcing requested but no target
-                provided.
+            base.ConfigurationError: Features encoder specified but no features
+                column specified.
         """
         encoded = self.source_encoder(
             batch.source, self.embeddings, is_source=True
         )
         mask = batch.source.mask
+        if batch.has_features and not self.has_features_encoder:
+            raise base.ConfigurationError(
+                "Features column provided but no features encoder specified"
+            )
         if self.has_features_encoder:
             if not batch.has_features:
                 raise base.ConfigurationError(
                     "Features encoder specified but "
-                    "no feature column specified"
+                    "no features column specified"
                 )
             features_encoded = self.features_encoder(
                 batch.features,
@@ -118,17 +136,13 @@ class TransformerModel(base.BaseModel):
             )
             encoded = torch.cat((encoded, features_encoded), dim=1)
             mask = torch.cat((mask, batch.features.mask), dim=1)
-        if self.training and self.teacher_forcing:
-            if not batch.has_target:
-                raise base.ConfigurationError(
-                    "Teacher forcing requested but no target provided"
-                )
+        if self.teacher_forcing and (self.training or self.validating):
             batch_size = len(batch)
             symbol = self.start_symbol(batch_size)
-            target = torch.cat((symbol, batch.target.padded), dim=1)
+            target = torch.cat((symbol, batch.target.tensor), dim=1)
             target_mask = torch.cat(
                 (
-                    torch.ones_like(symbol, dtype=bool),
+                    torch.zeros_like(symbol, dtype=bool),
                     batch.target.mask,
                 ),
                 dim=1,
@@ -137,13 +151,14 @@ class TransformerModel(base.BaseModel):
                 encoded, mask, target, target_mask, self.embeddings
             )
             logits = self.classifier(decoded).transpose(1, 2)
+<<<<<<< HEAD
+=======
+            # Truncates the prediction generated by the END_IDX token, which
+            # corresponds to nothing in the target tensor.
+>>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
             return logits[:, :, :-1]
         else:
-            return self.greedy_decode(
-                encoded,
-                mask,
-                batch.target.padded if batch.has_target else None,
-            )
+            return self.greedy_decode(encoded, mask)
 
     def get_decoder(self) -> modules.TransformerDecoder:
         return modules.TransformerDecoder(
@@ -152,7 +167,11 @@ class TransformerModel(base.BaseModel):
             embedding_size=self.embedding_size,
             hidden_size=self.decoder_hidden_size,
             layers=self.decoder_layers,
+<<<<<<< HEAD
             max_length=self.target_max_length,
+=======
+            max_length=self.max_target_length + 1,
+>>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
             num_embeddings=self.num_embeddings,
             attention_heads=self.attention_heads,
         )
@@ -161,15 +180,14 @@ class TransformerModel(base.BaseModel):
         self,
         encoded: torch.Tensor,
         mask: torch.Tensor,
-        target: Optional[torch.Tensor],
     ) -> torch.Tensor:
         """Decodes the output sequence greedily.
+
+        This performs student forcing.
 
         Args:
             encoded (torch.Tensor).
             mask (torch.Tensor).
-            target (torch.Tensor, optional): target symbols; if provided
-                decoding continues until this length is reached.
 
         Returns:
             torch.Tensor: logits from the decoder.
@@ -178,6 +196,7 @@ class TransformerModel(base.BaseModel):
         # The output distributions to be returned.
         outputs = []
         # The predicted symbols at each iteration.
+<<<<<<< HEAD
         predictions = [self.start_symbol(batch_size).squeeze(1)]
         if target is None:
             max_num_steps = self.max_target_length
@@ -186,6 +205,15 @@ class TransformerModel(base.BaseModel):
         else:
             max_num_steps = target.size(1)
         for _ in range(max_num_steps):
+=======
+        predictions = [
+            torch.tensor([special.START_IDX], device=self.device).repeat(
+                batch_size
+            )
+        ]
+        final = torch.zeros(batch_size, device=self.device, dtype=bool)
+        for _ in range(self.max_target_length):
+>>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
             logits = self.decode_step(
                 encoded,
                 mask,
@@ -194,11 +222,9 @@ class TransformerModel(base.BaseModel):
             outputs.append(logits)
             symbol = torch.argmax(logits, dim=1)
             predictions.append(symbol)
-            if target is None:
-                # Updates which sequences have decoded an END.
-                final = torch.logical_or(final, (symbol == special.END_IDX))
-                if final.all():
-                    break
+            final = torch.logical_or(final, symbol == special.END_IDX)
+            if final.all():
+                break
         # -> B x target_vocab_size x seq_len.
         outputs = torch.stack(outputs, dim=2)
         return outputs

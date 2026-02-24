@@ -7,15 +7,9 @@ import omegaconf
 
 from .. import callbacks, data, models, trainers
 
-
 # Register OmegaConf resolvers here.
-#
-# This allows expressions of the form:
-#
-# hidden_size: ${multiply:${model.init_args.embedding_size}, 4}
-#
-# which means that the hidden size is 4x the embedding size.
 omegaconf.OmegaConf.register_new_resolver("multiply", lambda x, y: x * y)
+omegaconf.OmegaConf.register_new_resolver("add", lambda x, y: x + y)
 
 
 class YoyodyneCLI(cli.LightningCLI):
@@ -46,6 +40,21 @@ class YoyodyneCLI(cli.LightningCLI):
         parser.link_arguments(
             "data.index",
             "model.init_args.index",
+            apply_on="instantiate",
+        )
+        parser.link_arguments(
+            "data.max_source_length",
+            "model.init_args.max_source_length",
+            apply_on="instantiate",
+        )
+        parser.link_arguments(
+            "data.max_features_length",
+            "model.init_args.max_features_length",
+            apply_on="instantiate",
+        )
+        parser.link_arguments(
+            "data.max_target_length",
+            "model.init_args.max_target_length",
             apply_on="instantiate",
         )
         parser.link_arguments(

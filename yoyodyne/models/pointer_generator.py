@@ -6,14 +6,11 @@ import torch
 from torch import nn
 
 from .. import data, special
-from . import base, beam_search, defaults, modules, rnn, transformer
+from . import base, beam_search, defaults, embeddings, modules
 
 
 class PointerGeneratorModel(base.BaseModel):
     """Base class for pointer-generator models."""
-
-    # Constructed inside __init__.
-    generation_probability: modules.GenerationProbability
 
     def _get_loss_func(
         self,
@@ -78,7 +75,7 @@ class PointerGeneratorModel(base.BaseModel):
         return loss
 
 
-class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
+class PointerGeneratorRNNModel(PointerGeneratorModel):
     """Abstract base class for pointer-generator models with RNN backends.
 
     If features are provided, a separate features attention module computes
@@ -89,6 +86,8 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
     Whereas See et al. use a two-layer MLP  for the vocabulary distribution,
     this uses a single linear layer.
 
+    This supports optional student forcing during training/validation.
+
     After:
         See, A., Liu, P. J., and Manning, C. D. 2017. Get to the point:
         summarization with pointer-generator networks. In Proceedings of the
@@ -97,6 +96,7 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
 
     Args:
         *args: passed to superclass.
+        teacher_forcing (bool, optional).
         **kwargs: passed to superclass.
 
     Raises:
@@ -104,13 +104,22 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
             must match.
     """
 
-    def __init__(self, *args, **kwargs):
+    classifier: nn.Linear
+    generation_probability: modules.GenerationProbability
+    teacher_forcing: bool
+
+    def __init__(
+        self,
+        *args,
+        teacher_forcing: bool = defaults.TEACHER_FORCING,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
-        # Uses the inherited defaults for the source embeddings and encoder.
         if self.has_features_encoder:
             self.features_attention = modules.Attention(
                 self.features_encoder.output_size, self.decoder_hidden_size
             )
+        self.decoder = self.get_decoder()
         self.generation_probability = modules.GenerationProbability(
             self.embedding_size,
             self.decoder_hidden_size,
@@ -126,12 +135,25 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
                 f"Number of encoder layers ({self.source_encoder.layers}) and "
                 f"decoder layers ({self.decoder_layers}) must match"
             )
+        self.teacher_forcing = teacher_forcing
+        self._log_model()
+        self.save_hyperparameters(
+            ignore=[
+                "classifier",
+                "decoder",
+                "embeddings",
+                "generation_probability",
+                "features_encoder",
+                "source_encoder",
+            ]
+        )
 
     def beam_decode(
         self,
         source: torch.Tensor,
         source_encoded: torch.Tensor,
         source_mask: torch.Tensor,
+        *,
         features_encoded: Optional[torch.Tensor] = None,
         features_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
@@ -182,15 +204,15 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
                         features_encoded,
                         features_mask,
                     )
-                    scores = nn.functional.log_softmax(
+                    logits = nn.functional.log_softmax(
                         prediction.squeeze(), dim=0
                     )
-                    for new_cell in cell.extensions(state, scores):
+                    for new_cell in cell.extensions(state, logits):
                         beam.push(new_cell)
             beam.update()
             if beam.final:
                 break
-        return beam.predictions(self.device), beam.scores(self.device)
+        return beam.predictions(self.device), beam.logits(self.device)
 
     def decode_step(
         self,
@@ -199,6 +221,7 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
         source_mask: torch.Tensor,
         symbol: torch.Tensor,
         state: modules.RNNState,
+        *,
         features_encoded: Optional[torch.Tensor] = None,
         features_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -257,7 +280,24 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
         gen_probs = self.generation_probability(context, hidden, embedded)
         scaled_output_dist = output_dist * gen_probs
         scaled_pointer_dist = pointer_dist * (1 - gen_probs)
+        # First argument is log-probs.
         return torch.log(scaled_output_dist + scaled_pointer_dist), state
+
+    def init_embeddings(
+        self,
+        num_embeddings: int,
+        embedding_size: int,
+    ) -> nn.Embedding:
+        """Initializes the embedding layer.
+
+        Args:
+            num_embeddings (int): number of embeddings.
+            embedding_size (int): dimension of embeddings.
+
+        Returns:
+            nn.Embedding: embedding layer.
+        """
+        return embeddings.normal_embedding(num_embeddings, embedding_size)
 
     def forward(
         self,
@@ -299,21 +339,29 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
             )
             if self.beam_width > 1:
                 return self.beam_decode(
-                    batch.source.padded,
+                    batch.source.tensor,
                     source_encoded,
                     batch.source.mask,
                     features_encoded=features_encoded,
                     features_mask=batch.features.mask,
                 )
-            else:
-                return self.greedy_decode(
-                    batch.source.padded,
+            elif self.training or self.validating:
+                # This version supports teacher forcing.
+                return self.greedy_decode_train_validate(
+                    batch.source.tensor,
                     source_encoded,
                     batch.source.mask,
-                    teacher_forcing=(
-                        self.teacher_forcing if self.training else False
+                    target=(
+                        batch.target.tensor if self.teacher_forcing else None
                     ),
-                    target=batch.target.padded if batch.has_target else None,
+                    features_encoded=features_encoded,
+                    features_mask=batch.features.mask,
+                )
+            else:
+                return self.greedy_decode_predict_test(
+                    batch.source.tensor,
+                    source_encoded,
+                    batch.source.mask,
                     features_encoded=features_encoded,
                     features_mask=batch.features.mask,
                 )
@@ -323,51 +371,51 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
             )
         elif self.beam_width > 1:
             return self.beam_decode(
-                batch.source.padded, source_encoded, batch.source.mask
+                batch.source.tensor, source_encoded, batch.source.mask
             )
-        else:
-            return self.greedy_decode(
-                batch.source.padded,
+        elif self.training or self.validating:
+            # This version supports teacher forcing.
+            return self.greedy_decode_train_validate(
+                batch.source.tensor,
                 source_encoded,
                 batch.source.mask,
-                teacher_forcing=(
-                    self.teacher_forcing if self.training else False
-                ),
-                target=batch.target.padded if batch.has_target else None,
+                target=batch.target.tensor if self.teacher_forcing else None,
+            )
+        else:
+            return self.greedy_decode_predict_test(
+                batch.source.tensor,
+                source_encoded,
+                batch.source.mask,
             )
 
-    def greedy_decode(
+    def greedy_decode_train_validate(
         self,
         source: torch.Tensor,
         source_encoded: torch.Tensor,
         source_mask: torch.Tensor,
-        teacher_forcing: bool = defaults.TEACHER_FORCING,
+        *,
         target: Optional[torch.Tensor] = None,
         features_encoded: Optional[torch.Tensor] = None,
         features_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Decodes a sequence given the encoded input.
+        """Decodes greedily during training and validation.
 
-        A hard upper bound on the length of the decoded strings is provided by
-        the length of the target strings (more specifically, the length of the
-        longest target string) if a target is provided, or `max_target_length`
-        if not. Decoding will halt earlier if no target is provided and all
-        sequences have reached END.
+        Provide the target for teacher forcing.
 
-        Implementationally this is almost identical to the method of the same
-        name in RNNModel.
+        If the target is provided, decoding halts at target length. If the
+        target is not provided, decoding will halt once each sequence in the
+        batch generates END or the maximum target length is reached,
+        whichever comes first.
 
         Args:
-            source (torch.Tensor): source symbols, used to compute pointer
+            source (torch.Tensor): source symbols, needed to compute pointer
                 weights.
-            source_encoded (torch.Tensor): encoded source symbols.
-            source_mask (torch.Tensor): mask for the source.
-            teacher_forcing (bool, optional): whether or not to decode with
-                teacher forcing.
-            target (torch.Tensor, optional): target symbols; if provided
-                decoding continues up until this length is reached.
-            features_encoded (torch.Tensor, optional): encoded feaure symbols.
-            features_mask (torch.Tensor, optional): mask for the features.
+            source_encoded (torch.Tensor).
+            source_mask (torch.Tensor).
+            features_encoded (torch.Tensor, optional).
+            features_mask (torch.Tensor, optional).
+            target (torch.Tensor, optional): target symbols; if provided,
+                these are used for teacher forcing.
 
         Returns:
             torch.Tensor: predictions of B x target_vocab_size x seq_len.
@@ -377,34 +425,83 @@ class PointerGeneratorRNNModel(PointerGeneratorModel, rnn.RNNModel):
         state = self.decoder.initial_state(batch_size)
         predictions = []
         if target is None:
-            max_num_steps = self.max_target_length
-            # Tracks when each sequence has decoded an END.
+            target_length = self.max_target_length
             final = torch.zeros(batch_size, device=self.device, dtype=bool)
         else:
-            max_num_steps = target.size(1)
-        for t in range(max_num_steps):
-            prediction, state = self.decode_step(
+            target_length = target.size(1)
+        for t in range(target_length):
+            log_probs, state = self.decode_step(
                 source,
                 source_encoded,
                 source_mask,
                 symbol,
                 state,
-                features_encoded,
-                features_mask,
+                features_encoded=features_encoded,
+                features_mask=features_mask,
             )
-            predictions.append(prediction.squeeze(1))
-            # With teacher forcing the next input is the gold symbol for this
-            # step; with student forcing, it's the top prediction.
-            symbol = (
-                target[:, t].unsqueeze(1)
-                if teacher_forcing
-                else torch.argmax(prediction, dim=2)
-            )
+            predictions.append(log_probs.squeeze(1))
             if target is None:
-                # Updates which sequences have decoded an END.
+                # Student forcing.
+                symbol = log_probs.argmax(dim=2)
                 final = torch.logical_or(final, symbol == special.END_IDX)
                 if final.all():
                     break
+            else:
+                # Teacher forcing.
+                symbol = target[:, t].unsqueeze(1)
+        predictions = torch.stack(predictions, dim=2)
+        return predictions
+
+    def greedy_decode_predict_test(
+        self,
+        source: torch.Tensor,
+        source_encoded: torch.Tensor,
+        source_mask: torch.Tensor,
+        *,
+        features_encoded: Optional[torch.Tensor] = None,
+        features_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Decodes greedily during prediction and testing.
+
+        These are different because teacher forcing is not supported, but
+        decoding halts once each sequence in the batch generates END or the
+        maximum target length is reached, whichever comes first.
+
+        Args:
+            source (torch.Tensor): source symbols, needed to compute pointer
+                weights.
+            source_encoded (torch.Tensor).
+            source_mask (torch.Tensor).
+            features_encoded (torch.Tensor, optional).
+            features_mask (torch.Tensor, optional).
+            target (torch.Tensor, optional): target symbols; if provided,
+                these are used for teacher forcing.
+            target_length (int, optional): maximum target length during
+                decoding. If not specified, max_target_length is used.
+
+        Returns:
+            torch.Tensor: predictions of B x target_vocab_size x seq_len.
+        """
+        batch_size = source_mask.size(0)
+        symbol = self.start_symbol(batch_size)
+        state = self.decoder.initial_state(batch_size)
+        predictions = []
+        final = torch.zeros(batch_size, device=self.device, dtype=bool)
+        for _ in range(self.max_target_length):
+            log_probs, state = self.decode_step(
+                source,
+                source_encoded,
+                source_mask,
+                symbol,
+                state,
+                features_encoded=features_encoded,
+                features_mask=features_mask,
+            )
+            predictions.append(log_probs.squeeze(1))
+            symbol = log_probs.argmax(dim=2)
+            final = torch.logical_or(final, symbol == special.END_IDX)
+            if final.all():
+                break
         predictions = torch.stack(predictions, dim=2)
         return predictions
 
@@ -458,9 +555,7 @@ class PointerGeneratorLSTMModel(PointerGeneratorRNNModel):
         return "pointer-generator LSTM"
 
 
-class PointerGeneratorTransformerModel(
-    PointerGeneratorModel, transformer.TransformerModel
-):
+class PointerGeneratorTransformerModel(PointerGeneratorModel):
     """Pointer-generator model with a transformer backend.
 
     After:
@@ -470,25 +565,30 @@ class PointerGeneratorTransformerModel(
         and Morphology, pages 90–98.
 
     Args:
-        attention_heads (int).
         *args: passed to the superclass.
+        attention_heads (int, optional).
+        teacher_forcing (bool, optional).
         **kwargs: passed to the superclass.
     """
 
-    # Model arguments.
     attention_heads: int
+    classifier: nn.Linear
+    generation_probability: modules.GenerationProbability
+    teacher_forcing: bool
 
     def __init__(
         self,
         *args,
-        attention_heads=defaults.ATTENTION_HEADS,
+        attention_heads: int = defaults.ATTENTION_HEADS,
+        teacher_forcing: bool = defaults.TEACHER_FORCING,
         **kwargs,
     ):
-        super().__init__(*args, attention_heads=attention_heads, **kwargs)
-        self.attention_weights = modules.AttentionOutput()
-        self.decoder.module.layers[-1].multihead_attn.register_forward_hook(
-            self.attention_weights,
+        super().__init__(*args, **kwargs)
+        self.attention_heads = attention_heads
+        self.classifier = nn.Linear(
+            self.embedding_size, self.target_vocab_size
         )
+        self.decoder = self.get_decoder()
         if self.has_features_encoder:
             self.generation_probability = modules.GenerationProbability(
                 self.embedding_size,
@@ -501,6 +601,18 @@ class PointerGeneratorTransformerModel(
                 self.embedding_size,
                 self.source_encoder.output_size,
             )
+        self.teacher_forcing = teacher_forcing
+        self._log_model()
+        self.save_hyperparameters(
+            ignore=[
+                "classifier",
+                "decoder",
+                "embeddings",
+                "generation_probability",
+                "source_encoder",
+                "features_encoder",
+            ]
+        )
 
     def decode_step(
         self,
@@ -508,7 +620,7 @@ class PointerGeneratorTransformerModel(
         source_encoded: torch.Tensor,
         source_mask: torch.Tensor,
         target: torch.Tensor,
-        target_mask: Optional[torch.Tensor],
+        target_mask: torch.Tensor,
         *,
         features_encoded: Optional[torch.Tensor] = None,
         features_mask: Optional[torch.Tensor] = None,
@@ -517,9 +629,9 @@ class PointerGeneratorTransformerModel(
 
         This will work on any sequence length, and returns output
         probabilities for all targets, meaning we can use this method for
-        greedy decoding, wherein only a single new token is decoded at a time,
-        or for teacher-forced training, wherein all tokens can be decoded in
-        parallel with a diagonal mask.
+        student forcing, in which only a single new token is decoded at a time,
+        or for teacher forcing, in which all tokens are be decoded in
+        parallel using a diagonal mask.
 
         Args:
             source (torch.Tensor): source symbols, used to compute pointer
@@ -535,13 +647,13 @@ class PointerGeneratorTransformerModel(
         Returns:
             torch.Tensor: predictions for that state.
         """
-        self.attention_weights.clear()
+        self.decoder.attention_output.clear()
         if self.has_features_encoder:
             decoded, target_embedded = self.decoder(
                 source_encoded,
                 source_mask,
                 target,
-                None,
+                target_mask,
                 self.embeddings,
                 features_encoded=features_encoded,
                 features_mask=features_mask,
@@ -551,15 +663,14 @@ class PointerGeneratorTransformerModel(
                 source_encoded,
                 source_mask,
                 target,
-                None,
+                target_mask,
                 self.embeddings,
             )
         # Outputs from the multi-headed attention from each decoder step to
         # the encoded source; values have been averaged over each attention
         # head.
         # -> B x target_seq_len x source_seq_len.
-        mha_outputs = self.attention_weights[0]
-        self.attention_weights.clear()
+        mha_outputs = self.decoder.attention_output[0]
         logits = self.classifier(decoded)
         output_dist = nn.functional.softmax(logits, dim=2)
         # -> B x target-seq_len x target_vocab_size.
@@ -588,6 +699,20 @@ class PointerGeneratorTransformerModel(
         scaled_output_dist = output_dist * gen_probs
         return torch.log(scaled_output_dist + scaled_pointer_dist)
 
+    def init_embeddings(
+        self, num_embeddings: int, embedding_size: int
+    ) -> nn.Embedding:
+        """Initializes the embedding layer.
+
+        Args:
+            num_embeddings (int): number of embeddings.
+            embedding_size (int): dimension of embeddings.
+
+        Returns:
+            nn.Embedding: embedding layer.
+        """
+        return embeddings.xavier_embedding(num_embeddings, embedding_size)
+
     def forward(
         self,
         batch: data.Batch,
@@ -605,13 +730,12 @@ class PointerGeneratorTransformerModel(
                 column specified.
             base.ConfigurationError: Features column specified but no feature
                 encoder specified.
-            NotImplementedError: Beam search not implemented.
         """
         source_encoded = self.source_encoder(
             batch.source, self.embeddings, is_source=True
         )
         if self.has_features_encoder:
-            if not batch.features:
+            if not batch.has_features:
                 raise base.ConfigurationError(
                     "Features encoder specified but "
                     "no feature column specified"
@@ -621,24 +745,67 @@ class PointerGeneratorTransformerModel(
                 self.embeddings,
                 is_source=False,
             )
-            return self.greedy_decode(
-                batch.source.padded,
-                source_encoded,
-                batch.source.mask,
-                batch.target.padded if batch.has_target else None,
-                features_encoded=features_encoded,
-                features_mask=batch.features.mask,
-            )
+            if (self.training or self.validating) and self.teacher_forcing:
+                batch_size = len(batch)
+                symbol = self.start_symbol(batch_size)
+                target = torch.cat((symbol, batch.target.tensor), dim=1)
+                target_mask = torch.cat(
+                    (
+                        torch.zeros_like(symbol, dtype=bool),
+                        batch.target.mask,
+                    ),
+                    dim=1,
+                )
+                log_probs = self.decode_step(
+                    batch.source.tensor,
+                    source_encoded,
+                    batch.source.mask,
+                    target,
+                    target_mask,
+                    features_encoded=features_encoded,
+                    features_mask=batch.features.mask,
+                )
+                # Truncates the prediction generated by the END_IDX token,
+                # which corresponds to nothing in the target tensor.
+                return log_probs[:, :-1, :].transpose(1, 2)
+            else:
+                return self.greedy_decode(
+                    batch.source.tensor,
+                    source_encoded,
+                    batch.source.mask,
+                    features_encoded=features_encoded,
+                    features_mask=batch.features.mask,
+                )
         elif batch.has_features:
             raise base.ConfigurationError(
                 "Feature column specified but no feature encoder specified"
             )
-        else:
-            return self.greedy_decode(
-                batch.source.padded,
+        if (self.training or self.validating) and self.teacher_forcing:
+            batch_size = len(batch)
+            symbol = self.start_symbol(batch_size)
+            target = torch.cat((symbol, batch.target.tensor), dim=1)
+            target_mask = torch.cat(
+                (
+                    torch.zeros_like(symbol, dtype=bool),
+                    batch.target.mask,
+                ),
+                dim=1,
+            )
+            log_probs = self.decode_step(
+                batch.source.tensor,
                 source_encoded,
                 batch.source.mask,
-                batch.target.padded if batch.has_target else None,
+                target,
+                target_mask,
+            )
+            # Truncates the prediction generated by the END_IDX token, which
+            # corresponds to nothing in the target tensor.
+            return log_probs[:, :-1, :].transpose(1, 2)
+        else:
+            return self.greedy_decode(
+                batch.source.tensor,
+                source_encoded,
+                batch.source.mask,
             )
 
     def get_decoder(
@@ -652,7 +819,7 @@ class PointerGeneratorTransformerModel(
             has_features_encoder=self.has_features_encoder,
             hidden_size=self.decoder_hidden_size,
             layers=self.decoder_layers,
-            max_length=self.max_target_length,
+            max_length=self.max_target_length + 1,
             num_embeddings=self.num_embeddings,
         )
 
@@ -661,26 +828,22 @@ class PointerGeneratorTransformerModel(
         source: torch.Tensor,
         source_encoded: torch.Tensor,
         source_mask: torch.Tensor,
-        target: Optional[torch.Tensor] = None,
         *,
         features_encoded: Optional[torch.Tensor] = None,
         features_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Decodes the output sequence greedily.
+        """Decodes greedily during prediction and testing.
 
-        A hard upper bound on the length of the decoded strings is provided by
-        the length of the target strings (more specifically, the length of the
-        longest target string) if a target is provided, or `max_target_length`
-        if not. Decoding will halt earlier if no target is provided and all
-        sequences have reached END.
+        This performs student forcing.
+
+        Decoding halts once each sequence in the batch generates END or the
+        maximum target length is reached, whichever comes first.
 
         Args:
             source (torch.Tensor): source symbols, used to compute pointer
                 weights.
             source_encoded (torch.Tensor): encoded source symbols.
             source_mask (torch.Tensor): mask for the source.
-            target (torch.Tensor, optional): target symbols; if provided
-                decoding continues until this length is reached.
             features_encoded (torch.Tensor, optional): encoded feaure symbols.
             features_mask (torch.Tensor, optional): mask for the features.
 
@@ -696,17 +859,12 @@ class PointerGeneratorTransformerModel(
                 batch_size
             )
         ]
-        if target is None:
-            max_num_steps = self.max_target_length
-            # Tracks when each sequence has decoded an END.
-            final = torch.zeros(batch_size, device=self.device, dtype=bool)
-        else:
-            max_num_steps = target.size(1)
-        for _ in range(max_num_steps):
+        final = torch.zeros(batch_size, device=self.device, dtype=bool)
+        for _ in range(self.max_target_length):
             if self.has_features_encoder:
                 assert features_encoded is not None
                 assert features_mask is not None
-                scores = self.decode_step(
+                log_probs = self.decode_step(
                     source,
                     source_encoded,
                     source_mask,
@@ -716,22 +874,20 @@ class PointerGeneratorTransformerModel(
                     features_mask=features_mask,
                 )
             else:
-                scores = self.decode_step(
+                log_probs = self.decode_step(
                     source,
                     source_encoded,
                     source_mask,
                     torch.stack(predictions, dim=1),
                     None,
                 )
-            scores = scores[:, -1, :]
-            outputs.append(scores)
-            symbol = torch.argmax(scores, dim=1)
+            log_probs = log_probs[:, -1, :]  # From last symbol.
+            outputs.append(log_probs)
+            symbol = log_probs.argmax(dim=1)
+            final = torch.logical_or(final, symbol == special.END_IDX)
+            if final.all():
+                break
             predictions.append(symbol)
-            if target is None:
-                # Updates which sequences have decoded an END.
-                final = torch.logical_or(final, (symbol == special.END_IDX))
-                if final.all():
-                    break
         outputs = torch.stack(outputs, dim=2)
         return outputs
 

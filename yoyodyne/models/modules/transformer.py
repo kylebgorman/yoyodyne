@@ -3,7 +3,7 @@
 import abc
 import collections
 import math
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import torch
 from torch import nn
@@ -54,7 +54,8 @@ class TransformerModule(base.BaseModule):
         attention_heads (int, optional): number of attention heads.
         hidden_size (int, optional): size of the hidden layer.
         layers (int, optional): number of layers.
-        max_length (int, optional): max length for input.
+        max_length (int, optional): maximum length for positional encoding.
+            If not provided, one must call `set_max_length` before use.
         **kwargs: passed to superclass.
     """
 
@@ -62,7 +63,7 @@ class TransformerModule(base.BaseModule):
     esq: float
     hidden_size: int
     layers: int
-    module: nn.TransformerEncoder
+    module: Union[nn.TransformerEncoder, nn.TransformerDecoder]
     positional_encoding: position.PositionalEncoding
 
     def __init__(
@@ -71,7 +72,7 @@ class TransformerModule(base.BaseModule):
         attention_heads: int = defaults.ATTENTION_HEADS,
         hidden_size: int = defaults.HIDDEN_SIZE,
         layers: int = defaults.LAYERS,
-        max_length: int = defaults.MAX_LENGTH,
+        max_length: Optional[int] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -80,9 +81,8 @@ class TransformerModule(base.BaseModule):
         self.hidden_size = hidden_size
         self.layers = layers
         self.module = self.get_module()
-        self.positional_encoding = position.PositionalEncoding(
-            self.embedding_size, max_length
-        )
+        if max_length is not None:
+            self.set_max_length(max_length)
 
     def embed(
         self, symbols: torch.Tensor, embeddings: nn.Embedding
@@ -94,13 +94,26 @@ class TransformerModule(base.BaseModule):
     @abc.abstractmethod
     def get_module(self) -> base.BaseModule: ...
 
+    @property
+    def max_length(self) -> int:
+        return self.positional_encoding.max_length
 
-class TransformerEncoder(TransformerModule):
+    def set_max_length(self, max_length: int) -> None:
+        # Overrides the default (no-op).
+        self.positional_encoding = position.PositionalEncoding(
+            self.embedding_size,
+            max_length,
+        )
+
+
+class TransformerEncoder(TransformerModule, base.BaseEncoder):
     """Transformer encoder.
 
     Our implementation uses "pre-norm", i.e., it applies layer normalization
     before attention. Because of this, we are not currently able to make use
     of PyTorch's nested tensor feature.
+
+    The caller is responsible for calling set_max_length.
 
     After:
         Xiong, R., Yang, Y., He, D., Zheng, K., Zheng, S., Xing, C., ..., and
@@ -129,10 +142,15 @@ class TransformerEncoder(TransformerModule):
         Returns:
             torch.Tensor: sequence of encoded symbols.
         """
+<<<<<<< HEAD
         embedded = self.embed(symbols.padded, embeddings)
         return self.module(
             embedded, src_key_padding_mask=symbols.mask, mask=mask
         )
+=======
+        embedded = self.embed(symbols.tensor, embeddings)
+        return self.module(embedded, src_key_padding_mask=symbols.mask)
+>>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64
 
     def get_module(self) -> nn.TransformerEncoder:
         encoder_layer = nn.TransformerEncoderLayer(
@@ -192,21 +210,22 @@ class FeatureInvariantTransformerEncoder(TransformerEncoder):
 
     def embed(
         self,
-        symbols: data.PaddedTensor,
+        symbols: torch.Tensor,
+        mask: torch.Tensor,
         embeddings: nn.Embedding,
         is_source: bool,
     ) -> torch.Tensor:
         """Embeds the symbols and adds type and positional encodings."""
-        embedded = self.esq * embeddings(symbols.padded)
+        embedded = self.esq * embeddings(symbols)
         type_embedded = self.esq * embeddings(
             torch.where(
-                symbols.mask,
-                special.SOURCE_IDX if is_source else special.FEATURES_IDX,
+                mask,
                 special.PAD_IDX,
+                special.SOURCE_IDX if is_source else special.FEATURES_IDX,
             )
         )
         return self.dropout_layer(
-            embedded + type_embedded + self.positional_encoding(symbols.padded)
+            embedded + type_embedded + self.positional_encoding(symbols)
         )
 
     def forward(
@@ -229,7 +248,9 @@ class FeatureInvariantTransformerEncoder(TransformerEncoder):
         Returns:
             torch.Tensor: sequence of encoded symbols.
         """
-        embedded = self.embed(symbols, embeddings, is_source)
+        embedded = self.embed(
+            symbols.tensor, symbols.mask, embeddings, is_source
+        )
         return self.module(embedded, src_key_padding_mask=symbols.mask)
 
     @property
@@ -271,7 +292,12 @@ class TransformerDecoder(TransformerModule):
     # Constructed inside __init__.
     module: WrappedTransformerDecoder
 
-    def __init__(self, *args, decoder_input_size, **kwargs):
+    def __init__(
+        self,
+        *args,
+        decoder_input_size: int = defaults.EMBEDDING_SIZE,
+        **kwargs,
+    ):
         self.decoder_input_size = decoder_input_size
         super().__init__(*args, **kwargs)
 
@@ -515,14 +541,14 @@ class PointerGeneratorTransformerDecoder(TransformerDecoder):
 
     Args:
         *args: passed to superclass.
-        has_features_encoder (bool).
+        has_features_encoder (bool, optional).
         *kwargs: passed to superclass.
     """
 
     def __init__(
         self,
         *args,
-        has_features_encoder: bool,
+        has_features_encoder: bool = False,
         **kwargs,
     ):
         self.has_features_encoder = has_features_encoder
@@ -562,11 +588,6 @@ class PointerGeneratorTransformerDecoder(TransformerDecoder):
             Tuple[torch.Tensor, torch.Tensor]: decoder outputs and the
                 embedded targets.
         """
-        # FIXME: temporary.
-        if target_mask is not None:
-            assert target_mask.dim() == 2, target_mask.shape
-        if features_mask is not None:
-            assert features_mask.dim() == 2, features_mask.shape
         target_embedded = self.embed(target, embeddings)
         causal_mask = self._causal_mask(target_embedded.size(1))
         # -> B x seq_len x d_model.
@@ -640,6 +661,7 @@ class PointerGeneratorTransformerDecoder(TransformerDecoder):
     @property
     def name(self) -> str:
         return "pointer-generator transformer"
+<<<<<<< HEAD
 
 
 class DecoderOnlyTransformerDecoder(TransformerEncoder):
@@ -652,3 +674,5 @@ class DecoderOnlyTransformerDecoder(TransformerEncoder):
     @property
     def name(self) -> str:
         return "decoder-only transformer"
+=======
+>>>>>>> 987b6c421644a8ced98c832d638af67aa0867e64

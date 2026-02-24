@@ -1,8 +1,7 @@
 """TSV parsing.
 
 The TsvParser yields data from TSV files using 1-based indexing and custom
-separators.
-"""
+separators."""
 
 import csv
 import dataclasses

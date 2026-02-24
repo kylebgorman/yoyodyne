@@ -7,7 +7,7 @@ import torch
 from torch import nn
 
 
-class LinearEncoder(base.BaseModule):
+class LinearEncoder(base.BaseEncoder):
     """Embeds the input tensor, and then applies an affine projection.
 
     This produces a simple non-contextual encoding of the input tensor.
@@ -44,7 +44,7 @@ class LinearEncoder(base.BaseModule):
         Returns:
             torch.Tensor.
         """
-        return self.linear(self.dropout_layer(embeddings(symbols.padded)))
+        return self.linear(self.dropout_layer(embeddings(symbols.tensor)))
 
     @property
     def name(self) -> str:
