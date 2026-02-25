@@ -146,11 +146,13 @@ class BaseModel(abc.ABC, lightning.LightningModule):
                 )
         self.source_encoder = source_encoder
         if features_encoder is False:
+            # No features encoder.
             if self.source_encoder is not None:
                 self.source_encoder.set_max_length(self.max_source_length + 2)
             self.features_encoder = None
             self.has_features_encoder = False
         elif features_encoder is True:
+            # Shared features encoder.
             if self.source_encoder is not None:
                 self.source_encoder.set_max_length(
                     max(self.max_source_length + 2, self.max_features_length)
@@ -158,6 +160,7 @@ class BaseModel(abc.ABC, lightning.LightningModule):
             self.features_encoder = self.source_encoder
             self.has_features_encoder = True
         else:
+            # Separate features encoder.
             if features_encoder.embedding_size != self.embedding_size:
                 raise ConfigurationError(
                     "Features embedding size "

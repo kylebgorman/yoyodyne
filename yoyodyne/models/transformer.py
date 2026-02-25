@@ -417,8 +417,8 @@ class CausalTransformerModel(base.BaseModel):
     @property
     def max_length(self) -> int:
         # Source (plus START/END) plus features plus target (plus START/END).
-        # The positional will be oversized if there are no features, but I
-        # believe this is harmless.
+        # The positional encoding may be oversized if there are no features,
+        # but I believe this is harmless.
         return (
             self.max_source_length
             + 2
