@@ -1,4 +1,4 @@
-class_path: yoyodyne.models.DecoderOnlyTransformerModel
+class_path: yoyodyne.models.CausalTransformerModel
 init_args:
   compute_ser: true
   decoder_dropout: .2
@@ -14,3 +14,4 @@ init_args:
     class_path: yoyodyne.schedulers.WarmupInverseSquareRoot
     init_args:
       warmup_epochs: 10
+  teacher_forcing: false

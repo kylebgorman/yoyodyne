@@ -217,8 +217,8 @@ class TransformerModel(base.BaseModel):
         return "transformer"
 
 
-class DecoderOnlyTransformerModel(base.BaseModel):
-    """Decoder-only transformer model.
+class CausalTransformerModel(base.BaseModel):
+    """Causal transformer model.
 
     This implements the decoder-only ("prefix LM") transformer architecture in
     which there is no separate encoder, and cross-attention is replaced by
@@ -333,8 +333,8 @@ class DecoderOnlyTransformerModel(base.BaseModel):
         else:
             return self.greedy_decode(prefix)
 
-    def get_decoder(self) -> modules.DecoderOnlyTransformerDecoder:
-        return modules.DecoderOnlyTransformerDecoder(
+    def get_decoder(self) -> modules.CausalTransformerDecoder:
+        return modules.CausalTransformerDecoder(
             attention_heads=self.attention_heads,
             dropout=self.decoder_dropout,
             embedding_size=self.embedding_size,
@@ -429,4 +429,4 @@ class DecoderOnlyTransformerModel(base.BaseModel):
 
     @property
     def name(self) -> str:
-        return "decoder-only transformer"
+        return "causal transformer"

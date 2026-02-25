@@ -22,10 +22,10 @@ TOY_DATA_CONFIG_PATH = os.path.join(CONFIG_DIR, "toy_data.yaml")
 TOY_TRAINER_CONFIG_PATH = os.path.join(CONFIG_DIR, "toy_trainer.yaml")
 REAL_TRAINER_CONFIG_PATH = os.path.join(CONFIG_DIR, "real_trainer.yaml")
 ARCH = [
+    "causal_transformer",
+    "causal_transformer_student_forcing",
     "context_hard_attention_gru",
     "context_hard_attention_lstm",
-    "decoder_only_transformer",
-    "decoder_only_transformer_student_forcing",
     "gru",
     "hard_attention_gru",
     "hard_attention_lstm",
@@ -43,8 +43,8 @@ ARCH = [
     "transformer_student_forcing",
 ]
 INFLECTION_ARCH = [
+    "causal_transformer_shared_features",
     "context_hard_attention_lstm_separate_features",
-    "decoder_only_transformer_shared_features",
     "hard_attention_lstm_separate_features",
     "pointer_generator_lstm_separate_features",
     "soft_attention_lstm_gru_features",

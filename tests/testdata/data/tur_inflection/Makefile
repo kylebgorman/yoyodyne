@@ -3,10 +3,10 @@ SHELL := /bin/bash
 all: train.tsv \
 	dev.tsv \
 	test.tsv \
+	causal_transformer_expected.test \
+	causal_transformer_expected.txt \
 	context_hard_attention_lstm_separate_features_expected.test \
 	context_hard_attention_lstm_separate_features_expected.txt \
-	decoder_only_transformer_expected.test \
-	decoder_only_transformer_expected.txt \
 	hard_attention_lstm_separate_features_expected.test \
 	hard_attention_lstm_separate_features_expected.txt \
 	pointer_generator_lstm_separate_features_expected.test \

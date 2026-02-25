@@ -12,6 +12,14 @@ TARGET_VOCAB_SIZE = 32
 
 
 class TestModel:
+
+    def test_causal_transformer(self):
+        model = models.CausalTransformerModel(
+            target_vocab_size=TARGET_VOCAB_SIZE,
+            vocab_size=VOCAB_SIZE,
+        )
+        assert isinstance(model, models.CausalTransformerModel)
+
     def test_hard_attention_gru(self):
         model = models.HardAttentionGRUModel(
             source_encoder=modules.GRUEncoder(),

@@ -654,11 +654,11 @@ class PointerGeneratorTransformerDecoder(TransformerDecoder):
         return "pointer-generator transformer"
 
 
-class DecoderOnlyTransformerDecoder(TransformerEncoder):
-    """Decoder for the decoder-only model.
+class CausalTransformerDecoder(TransformerEncoder):
+    """Decoder for the causal transformer.
 
-    This is, however, more similar to the transformer encoder despite its use
-    as a decoder.
+    This borrows some implementation from the vanilla transformer encoder,
+    even though it is used here as a decoder.
     """
 
     def forward(
@@ -698,4 +698,4 @@ class DecoderOnlyTransformerDecoder(TransformerEncoder):
 
     @property
     def name(self) -> str:
-        return "decoder-only transformer"
+        return "causal transformer"
