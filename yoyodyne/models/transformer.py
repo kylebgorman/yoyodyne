@@ -14,7 +14,7 @@ class TransformerModel(base.BaseModel):
     features encoding with the source encoding on the sequence length
     dimension.
 
-    This supports optional student-forcing during training.
+    This supports optional student forcing during training.
 
     Args:
         *args: passed to superclass.
@@ -162,7 +162,7 @@ class TransformerModel(base.BaseModel):
     ) -> torch.Tensor:
         """Decodes the output sequence greedily.
 
-        This performs student-forcing.
+        This performs student forcing.
 
         Args:
             encoded (torch.Tensor).
@@ -346,7 +346,7 @@ class CausalTransformerModel(base.BaseModel):
     def greedy_decode(self, prefix: torch.Tensor) -> torch.Tensor:
         """Decodes the output sequence greedily.
 
-        This performs student-forcing.
+        This performs student forcing.
 
         Since this is a single stack without a separate encoder, we must
         feed the growing sequence (prefix + predicted target) into the model

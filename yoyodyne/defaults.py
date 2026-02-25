@@ -8,7 +8,6 @@ from . import optimizers, schedulers
 
 # Scalar constants.
 EPSILON = 1e-7
-NEG_EPSILon = -1e7
 NEG_INF = -math.inf
 
 # Default text encoding.

@@ -192,10 +192,15 @@ class TestYoyodyne:
 
     # Misconfiguration tests.
 
-    def test_misconfiguration_source_embedding_neq_model_embedding(self):
+    def test_misconfigured_causal_transformer_with_encoders(self):
+        self._test_misconfiguration_procedure(
+            "tur_inflection", "misconfigured_causal_transformer_with_encoders"
+        )
+
+    def test_misconfiguration_encoder_layers_neq_decoder_layers(self):
         self._test_misconfiguration_procedure(
             "ice_g2p",
-            "misconfigured_source_embedding_neq_model_embedding",
+            "misconfigured_encoder_layers_neq_decoder_layers",
         )
 
     def test_misconfiguration_features_embedding_neq_model_embedding(self):
@@ -216,10 +221,10 @@ class TestYoyodyne:
             "soft_attention_lstm_shared_features",
         )
 
-    def test_misconfiguration_encoder_layers_neq_decoder_layers(self):
+    def test_misconfiguration_source_embedding_neq_model_embedding(self):
         self._test_misconfiguration_procedure(
             "ice_g2p",
-            "misconfigured_encoder_layers_neq_decoder_layers",
+            "misconfigured_source_embedding_neq_model_embedding",
         )
 
     def _test_misconfiguration_procedure(self, data: str, arch: str):
@@ -231,7 +236,7 @@ class TestYoyodyne:
         data_config_path = os.path.join(CONFIG_DIR, f"{data}_data.yaml")
         model_config_path = os.path.join(CONFIG_DIR, f"{arch}.yaml")
         self.assertNonEmptyFileExists(model_config_path)
-        with pytest.raises(ValueError):
+        with pytest.raises((SystemExit, ValueError)):
             main.python_interface(
                 [
                     "validate",
