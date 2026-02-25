@@ -117,8 +117,9 @@ class TransformerEncoder(TransformerModule, base.BaseEncoder):
 
     After:
         Xiong, R., Yang, Y., He, D., Zheng, K., Zheng, S., Xing, C., ..., and
-        Liu, T.-Y. 2020. In Proceedings of the 37th International Conference
-        on Machine Learning, pages 10524-10533.
+        Liu, T.-Y. 2020. On layer normalization in the transformer
+        architecture. In Proceedings of the 37th International Conference on
+        Machine Learning, pages 10524-10533.
     """
 
     def forward(
@@ -651,3 +652,50 @@ class PointerGeneratorTransformerDecoder(TransformerDecoder):
     @property
     def name(self) -> str:
         return "pointer-generator transformer"
+
+
+class CausalTransformerDecoder(TransformerEncoder):
+    """Decoder for the causal transformer.
+
+    This borrows some implementation from the vanilla transformer encoder,
+    even though it is used here as a decoder.
+    """
+
+    def forward(
+        self,
+        symbols: data.PaddedTensor,
+        embeddings: nn.Embedding,
+        mask: torch.Tensor,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Encodes the symbols.
+
+        This overrides the superclass definition to take a mask argument.
+
+        Args:
+            symbols (data.PaddedTensor).
+            embeddings (nn.Embedding).
+            mask (torch.Tensor).
+            *args: ignored.
+            **kwargs: ignored.
+
+        Returns:
+            torch.Tensor: sequence of encoded symbols.
+        """
+        embedded = self.embed(symbols.tensor, embeddings)
+        # Casts this to float.
+        padding_mask = torch.where(
+            symbols.mask,
+            torch.full_like(symbols.mask, defaults.NEG_INF, dtype=torch.float),
+            torch.zeros_like(symbols.mask, dtype=torch.float),
+        )
+        return self.module(
+            embedded,
+            mask=mask,
+            src_key_padding_mask=padding_mask,
+        )
+
+    @property
+    def name(self) -> str:
+        return "causal transformer"

@@ -32,9 +32,15 @@ class BaseModel(abc.ABC, lightning.LightningModule):
     * Evaluation metrics are tracked by test_step; nothing is returned.
     * Validation loss and evaluation metrics are tracked by validation_step;
       nothing is returned.
-    * If a source encoder is specified and features_encoder is True, the
-      source encoder will be reused as the features encoder; if False (the
-      default), no features encoder will be used.
+
+    The source_encoder argument uses a two-way sentinel system: None means
+    no source_encoder is used; a BaseEncoder instance is used as a source
+    encoder.
+
+    The features_encoder argument uses a three-way sentinel system: False
+    means no features encoder; True indicates that the source encoder is reused
+    as the features encoder; a BaseEncoder instance is used as a separate
+    features encoder.
 
     Derived classes should call the superclass init and then issue:
 
@@ -73,7 +79,6 @@ class BaseModel(abc.ABC, lightning.LightningModule):
     max_features_length: int
     max_target_length: int
 
-    # TODO(kbg): do decoder-only models with this nullability.
     source_encoder: Optional[modules.BaseEncoder]
     features_encoder: Optional[modules.BaseEncoder]
     decoder: modules.BaseModule
@@ -141,11 +146,13 @@ class BaseModel(abc.ABC, lightning.LightningModule):
                 )
         self.source_encoder = source_encoder
         if features_encoder is False:
+            # No features encoder.
             if self.source_encoder is not None:
                 self.source_encoder.set_max_length(self.max_source_length + 2)
             self.features_encoder = None
             self.has_features_encoder = False
         elif features_encoder is True:
+            # Shared features encoder.
             if self.source_encoder is not None:
                 self.source_encoder.set_max_length(
                     max(self.max_source_length + 2, self.max_features_length)
@@ -153,6 +160,7 @@ class BaseModel(abc.ABC, lightning.LightningModule):
             self.features_encoder = self.source_encoder
             self.has_features_encoder = True
         else:
+            # Separate features encoder.
             if features_encoder.embedding_size != self.embedding_size:
                 raise ConfigurationError(
                     "Features embedding size "
@@ -190,12 +198,12 @@ class BaseModel(abc.ABC, lightning.LightningModule):
                 logging.info(
                     "Source/features encoder: %s", self.source_encoder.name
                 )
-            else:
+            elif self.source_encoder:
                 logging.info("Source encoder: %s", self.source_encoder.name)
                 logging.info(
                     "Features encoder: %s", self.features_encoder.name
                 )
-        else:
+        elif self.source_encoder:
             logging.info("Encoder: %s", self.source_encoder.name)
         logging.info("Decoder: %s", self.decoder.name)
 
@@ -279,6 +287,7 @@ class BaseModel(abc.ABC, lightning.LightningModule):
         # Rather than crashing, we simply warn about lack of deterministic
         # algorithms.
         if torch.are_deterministic_algorithms_enabled():
+            logging.info("(Only) warning about non-deterministic algorithms")
             torch.use_deterministic_algorithms(True, warn_only=True)
 
     def predict_step(

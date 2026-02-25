@@ -22,6 +22,8 @@ TOY_DATA_CONFIG_PATH = os.path.join(CONFIG_DIR, "toy_data.yaml")
 TOY_TRAINER_CONFIG_PATH = os.path.join(CONFIG_DIR, "toy_trainer.yaml")
 REAL_TRAINER_CONFIG_PATH = os.path.join(CONFIG_DIR, "real_trainer.yaml")
 ARCH = [
+    "causal_transformer",
+    "causal_transformer_student_forcing",
     "context_hard_attention_gru",
     "context_hard_attention_lstm",
     "gru",
@@ -42,6 +44,7 @@ ARCH = [
     "transformer_student_forcing",
 ]
 INFLECTION_ARCH = [
+    "causal_transformer_shared_features",
     "context_hard_attention_lstm_separate_features",
     "hard_attention_lstm_separate_features",
     "pointer_generator_lstm_separate_features",
@@ -191,10 +194,10 @@ class TestYoyodyne:
 
     # Misconfiguration tests.
 
-    def test_misconfiguration_source_embedding_neq_model_embedding(self):
+    def test_misconfiguration_encoder_layers_neq_decoder_layers(self):
         self._test_misconfiguration_procedure(
             "ice_g2p",
-            "misconfigured_source_embedding_neq_model_embedding",
+            "misconfigured_encoder_layers_neq_decoder_layers",
         )
 
     def test_misconfiguration_features_embedding_neq_model_embedding(self):
@@ -215,10 +218,10 @@ class TestYoyodyne:
             "soft_attention_lstm_shared_features",
         )
 
-    def test_misconfiguration_encoder_layers_neq_decoder_layers(self):
+    def test_misconfiguration_source_embedding_neq_model_embedding(self):
         self._test_misconfiguration_procedure(
             "ice_g2p",
-            "misconfigured_encoder_layers_neq_decoder_layers",
+            "misconfigured_source_embedding_neq_model_embedding",
         )
 
     def _test_misconfiguration_procedure(self, data: str, arch: str):

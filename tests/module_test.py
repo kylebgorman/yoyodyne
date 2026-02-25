@@ -14,6 +14,10 @@ class TestModule:
         module = modules.Attention()
         assert isinstance(module, modules.Attention)
 
+    def test_causal_transformer_decoder(self):
+        module = modules.CausalTransformerDecoder()
+        assert isinstance(module, modules.CausalTransformerDecoder)
+
     @pytest.mark.parametrize(
         "mod",
         [

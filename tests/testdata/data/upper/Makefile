@@ -3,6 +3,10 @@ SHELL := /bin/bash
 all: train.tsv \
 	dev.tsv \
 	test.tsv \
+	causal_transformer_expected.test \
+	causal_transformer_expected.txt \
+	causal_transformer_student_forcing_expected.test \
+	causal_transformer_student_forcing_expected.txt \
 	context_hard_attention_gru_expected.test \
 	context_hard_attention_gru_expected.txt \
 	context_hard_attention_lstm_expected.test \
