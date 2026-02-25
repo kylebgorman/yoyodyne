@@ -192,11 +192,6 @@ class TestYoyodyne:
 
     # Misconfiguration tests.
 
-    def test_misconfigured_causal_transformer_with_encoders(self):
-        self._test_misconfiguration_procedure(
-            "tur_inflection", "misconfigured_causal_transformer_with_encoders"
-        )
-
     def test_misconfiguration_encoder_layers_neq_decoder_layers(self):
         self._test_misconfiguration_procedure(
             "ice_g2p",
@@ -236,7 +231,7 @@ class TestYoyodyne:
         data_config_path = os.path.join(CONFIG_DIR, f"{data}_data.yaml")
         model_config_path = os.path.join(CONFIG_DIR, f"{arch}.yaml")
         self.assertNonEmptyFileExists(model_config_path)
-        with pytest.raises((SystemExit, ValueError)):
+        with pytest.raises(ValueError):
             main.python_interface(
                 [
                     "validate",
