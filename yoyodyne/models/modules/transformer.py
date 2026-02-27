@@ -64,8 +64,7 @@ class TransformerModule(base.BaseModule):
     hidden_size: int
     layers: int
     module: Union[nn.TransformerEncoder, nn.TransformerDecoder]
-    # FIXME(kbg): generalize
-    positional_encoding: position.SinusodialEncoding
+    positional_encoding: position.BasePositionalEncoding
 
     def __init__(
         self,
@@ -101,8 +100,8 @@ class TransformerModule(base.BaseModule):
 
     def set_max_length(self, max_length: int) -> None:
         # Overrides the default (no-op).
-        # FIXME
-        self.positional_encoding = position.SinusodialEncoding(
+        # FIXME(kbg): generalize.
+        self.positional_encoding = position.SinusoidalPositionalEncoding(
             self.embedding_size,
             max_length,
         )
