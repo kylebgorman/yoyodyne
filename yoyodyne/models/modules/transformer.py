@@ -64,7 +64,8 @@ class TransformerModule(base.BaseModule):
     hidden_size: int
     layers: int
     module: Union[nn.TransformerEncoder, nn.TransformerDecoder]
-    positional_encoding: position.PositionalEncoding
+    # FIXME(kbg): generalize
+    positional_encoding: position.SinusodialEncoding
 
     def __init__(
         self,
@@ -89,7 +90,7 @@ class TransformerModule(base.BaseModule):
     ) -> torch.Tensor:
         """Embeds the symbols and adds positional encoding."""
         embedded = self.esq * embeddings(symbols)
-        return self.dropout_layer(embedded + self.positional_encoding(symbols))
+        return self.dropout_layer(self.positional_encoding(embedded, symbols))
 
     @abc.abstractmethod
     def get_module(self) -> base.BaseModule: ...
@@ -100,7 +101,8 @@ class TransformerModule(base.BaseModule):
 
     def set_max_length(self, max_length: int) -> None:
         # Overrides the default (no-op).
-        self.positional_encoding = position.PositionalEncoding(
+        # FIXME
+        self.positional_encoding = position.SinusodialEncoding(
             self.embedding_size,
             max_length,
         )
@@ -216,7 +218,7 @@ class FeatureInvariantTransformerEncoder(TransformerEncoder):
             )
         )
         return self.dropout_layer(
-            embedded + type_embedded + self.positional_encoding(symbols)
+            self.positional_encoding(embedded + type_embedded, symbols)
         )
 
     def forward(
