@@ -56,6 +56,9 @@ class TransformerModule(base.BaseModule):
         layers (int, optional): number of layers.
         max_length (int, optional): maximum length for positional encoding.
             If not provided, one must call `set_max_length` before use.
+        positional_encoding (position.BasePositionalEncoding, optional):
+            a positional encoding object; if not specified, a sinusoidal
+            encoding of the appropriate size will be allocated.
         **kwargs: passed to superclass.
     """
 
@@ -64,7 +67,7 @@ class TransformerModule(base.BaseModule):
     hidden_size: int
     layers: int
     module: Union[nn.TransformerEncoder, nn.TransformerDecoder]
-    positional_encoding: position.BasePositionalEncoding
+    positional_encoding: Optional[position.BasePositionalEncoding]
 
     def __init__(
         self,
@@ -73,6 +76,7 @@ class TransformerModule(base.BaseModule):
         hidden_size: int = defaults.HIDDEN_SIZE,
         layers: int = defaults.LAYERS,
         max_length: Optional[int] = None,
+        positional_encoding: Optional[position.BasePositionalEncoding] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -81,6 +85,7 @@ class TransformerModule(base.BaseModule):
         self.hidden_size = hidden_size
         self.layers = layers
         self.module = self.get_module()
+        self.positional_encoding = positional_encoding
         if max_length is not None:
             self.set_max_length(max_length)
 
@@ -99,12 +104,11 @@ class TransformerModule(base.BaseModule):
         return self.positional_encoding.max_length
 
     def set_max_length(self, max_length: int) -> None:
-        # Overrides the default (no-op).
-        # FIXME(kbg): generalize.
-        self.positional_encoding = position.SinusoidalPositionalEncoding(
-            self.embedding_size,
-            max_length,
-        )
+        if self.positional_encoding is None:
+            self.positional_encoding = position.SinusoidalPositionalEncoding(
+                self.embedding_size,
+                max_length,
+            )
 
 
 class TransformerEncoder(TransformerModule, base.BaseEncoder):
@@ -160,8 +164,6 @@ class TransformerEncoder(TransformerModule, base.BaseEncoder):
             norm=nn.LayerNorm(self.embedding_size),
             # This silences a warning about the use of nested tensors,
             # currently an experimental feature.
-            # TODO(#225): Re-enable if nested tensors are generalized to work
-            # with `norm_first`.
             enable_nested_tensor=False,
         )
 
@@ -196,9 +198,6 @@ class FeatureInvariantTransformerEncoder(TransformerEncoder):
         the European Chapter of the Association for Computational Linguistics:
         Main Volume, pages 1901-1907.
     """
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
 
     def embed(
         self,
