@@ -44,7 +44,7 @@ ARCH = [
     "transformer_student_forcing",
 ]
 INFLECTION_ARCH = [
-    "causal_transformer_shared_features",
+    "causal_transformer",
     "context_hard_attention_lstm_separate_features",
     "hard_attention_lstm_separate_features",
     "pointer_generator_lstm_separate_features",

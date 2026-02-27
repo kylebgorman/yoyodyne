@@ -75,6 +75,18 @@ To use any of the configurations below, run:
 These models all involve a simple sequence-to-sequence transduction without any
 feature conditioning.
 
+-   [`causal_transformer.yaml`](causal_transformer.yaml) is a transformer decoder
+    without a separate encoder; the hyperparameters have not yet been tuned.
+-   [`frankenformer.yaml`](frankenformer.yaml) is a hybrid system with a
+    transformer encoder and an soft attention LSTM decoder. This model is in
+    need of hyperparameter tuning before it is ready for deployment.
+-   [`hard_attention_lstm.yaml`](hard_attention_lstm.yaml) and
+    [`context_hard_attention_lstm.yaml`](context_hard_attention_lstm.yaml) are
+    variants of hard attention LSTMs with hyperparameters similar to those of Wu
+    & Cotterell (2019).
+-   [`pointer_generator_transformer.yaml`](pointer_generator_transformer.yaml)
+    shows a pointer-generator transformer with hyperparameters similar to those
+    of Singer & Kann (2020).
 -   [`soft_attention_gru.yaml`](soft_attention_gru.yaml) and
     [`soft_attention_lstm.yaml`](soft_attention_lstm.yaml) are soft attention
     RNN models with hyperparameters similar to those of MED (Kann & Schütze
@@ -88,19 +100,9 @@ feature conditioning.
 -   [`soft_attention_deep_lstm.yaml`](soft_attention_deep_lstm.yaml) is a
     MED-like variant where the encoder has 2 LSTM layers and the decoder has 2
     LSTM layers. Performance is often quite a bit worse with this design.
--   [`frankenformer.yaml`](frankenformer.yaml) is a hybrid system with a
-    transformer encoder and an soft attention LSTM decoder. This model is in
-    need of hyperparameter tuning before it is ready for deployment.
--   [`hard_attention_lstm.yaml`](hard_attention_lstm.yaml) and
-    [`context_hard_attention_lstm.yaml`](context_hard_attention_lstm.yaml) are
-    variants of hard attention LSTMs with hyperparameters similar to those of Wu
-    & Cotterell (2019).
 -   [`pointer_generator_lstm.yaml`](pointer_generator_lstm.yaml) shows a
     pointer-generator LSTM with hyperparameters similar to those of Sharma et
     al. (2018, their "high setting").
--   [`pointer_generator_transformer.yaml`](pointer_generator_transformer.yaml)
-    shows a pointer-generator transformer with hyperparameters similar to those
-    of Singer & Kann (2020).
 -   [`transducer_lstm.yaml`](transducer_lstm.yaml) shows a transducer LSTM with
     hyperparameters similar to those used by Makarov & Clematide (2021).
 -   [`transformer.yaml`](transformer.yaml) is a transformer with hyperparameters
