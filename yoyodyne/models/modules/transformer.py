@@ -103,11 +103,24 @@ class TransformerModule(base.BaseModule):
     def max_length(self) -> int:
         return self.positional_encoding.max_length
 
+    @property
+    def name(self) -> str:
+        return (
+            "transformer "
+            f"({self.positional_encoding.name} positional encoding)"
+        )
+
     def set_max_length(self, max_length: int) -> None:
         if self.positional_encoding is None:
             self.positional_encoding = position.SinusoidalPositionalEncoding(
                 self.embedding_size,
                 max_length,
+            )
+        elif self.positional_encoding.max_length < max_length:
+            raise Error(
+                f"{self.positional_encoding.name} max_length "
+                f"({self.positional_encoding.max_length}) < "
+                f"max_length ({max_length}"
             )
 
 
@@ -166,10 +179,6 @@ class TransformerEncoder(TransformerModule, base.BaseEncoder):
             # currently an experimental feature.
             enable_nested_tensor=False,
         )
-
-    @property
-    def name(self) -> str:
-        return "transformer"
 
     @property
     def output_size(self) -> int:
@@ -246,7 +255,7 @@ class FeatureInvariantTransformerEncoder(TransformerEncoder):
 
     @property
     def name(self) -> str:
-        return "feature-invariant transformer"
+        return f"feature-invariant {super().name}"
 
 
 class WrappedTransformerDecoder(nn.TransformerDecoder):
@@ -349,10 +358,6 @@ class TransformerDecoder(TransformerModule):
             device=self.device,
             dtype=bool,
         )
-
-    @property
-    def name(self) -> str:
-        return "transformer"
 
     @property
     def output_size(self) -> int:
@@ -651,7 +656,7 @@ class PointerGeneratorTransformerDecoder(TransformerDecoder):
 
     @property
     def name(self) -> str:
-        return "pointer-generator transformer"
+        return f"pointer-generator {super().name}"
 
 
 class CausalTransformerDecoder(TransformerEncoder):
@@ -698,4 +703,4 @@ class CausalTransformerDecoder(TransformerEncoder):
 
     @property
     def name(self) -> str:
-        return "causal transformer"
+        return f"causal {super().name}"

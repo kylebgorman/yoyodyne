@@ -52,7 +52,7 @@ class TestModule:
         "mod",
         [
             modules.AbsolutePositionalEncoding,
-            modules.NoPositionalEncoding,
+            modules.NullPositionalEncoding,
             modules.SinusoidalPositionalEncoding,
         ],
     )
