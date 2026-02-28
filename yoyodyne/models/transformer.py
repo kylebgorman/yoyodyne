@@ -1,5 +1,7 @@
 """Transformer model classes."""
 
+from typing import Optional
+
 import torch
 from torch import nn
 
@@ -19,6 +21,9 @@ class TransformerModel(base.BaseModel):
     Args:
         *args: passed to superclass.
         attention_heads (int, optional).
+        decoder_positional_encoding (modules.BasePositionalEncoding, optional):
+            a positional encoding object for the decoder; if not specified, a
+            sinusoidal encoding of the appropriate size will be allocated.
         teacher_forcing (bool, optional).
         **kwargs: passed to superclass.
     """
@@ -32,6 +37,9 @@ class TransformerModel(base.BaseModel):
         self,
         *args,
         attention_heads: int = defaults.ATTENTION_HEADS,
+        decoder_positional_encoding: Optional[
+            modules.BasePositionalEncoding
+        ] = None,
         teacher_forcing: bool = defaults.TEACHER_FORCING,
         **kwargs,
     ):
@@ -40,6 +48,7 @@ class TransformerModel(base.BaseModel):
         self.classifier = nn.Linear(
             self.embedding_size, self.target_vocab_size
         )
+        self.decoder_positional_encoding = decoder_positional_encoding
         if self.has_features_encoder and (
             self.source_encoder.output_size
             != self.features_encoder.output_size
@@ -56,6 +65,8 @@ class TransformerModel(base.BaseModel):
             ignore=[
                 "classifier",
                 "decoder",
+                # This lives in the decoder.
+                "decoder_positional_encoding",
                 "embeddings",
                 "features_encoder",
                 "source_encoder",
@@ -145,6 +156,7 @@ class TransformerModel(base.BaseModel):
 
     def get_decoder(self) -> modules.TransformerDecoder:
         return modules.TransformerDecoder(
+            attention_heads=self.attention_heads,
             decoder_input_size=self.source_encoder.output_size,
             dropout=self.decoder_dropout,
             embedding_size=self.embedding_size,
@@ -152,7 +164,7 @@ class TransformerModel(base.BaseModel):
             layers=self.decoder_layers,
             max_length=self.max_target_length + 1,
             num_embeddings=self.num_embeddings,
-            attention_heads=self.attention_heads,
+            positional_encoding=self.decoder_positional_encoding,
         )
 
     def greedy_decode(
@@ -238,6 +250,9 @@ class CausalTransformerModel(base.BaseModel):
     Args:
         *args: passed to superclass.
         attention_heads (int, optional).
+        positional_encoding (modules.BasePositionalEncoding, optional):
+            a positional encoding object; if not specified, a sinusoidal
+            encoding of the appropriate size will be allocated.
         teacher_forcing (bool, optional): should teacher (rather than student)
             forcing be used?
         **kwargs: passed to superclass.
@@ -251,6 +266,7 @@ class CausalTransformerModel(base.BaseModel):
         self,
         *args,
         attention_heads: int = defaults.ATTENTION_HEADS,
+        positional_encoding: Optional[modules.BasePositionalEncoding] = None,
         teacher_forcing: bool = defaults.TEACHER_FORCING,
         **kwargs,
     ):
@@ -269,10 +285,11 @@ class CausalTransformerModel(base.BaseModel):
             **kwargs,
         )
         self.attention_heads = attention_heads
-        self.teacher_forcing = teacher_forcing
         self.classifier = nn.Linear(
             self.embedding_size, self.target_vocab_size
         )
+        self.positional_encoding = positional_encoding
+        self.teacher_forcing = teacher_forcing
         self.decoder = self.get_decoder()
         self._log_model()
         self.save_hyperparameters(
@@ -280,6 +297,8 @@ class CausalTransformerModel(base.BaseModel):
                 "classifier",
                 "decoder",
                 "embeddings",
+                # This lives in the decoder.
+                "positional_encoding",
             ]
         )
 
@@ -341,6 +360,7 @@ class CausalTransformerModel(base.BaseModel):
             hidden_size=self.decoder_hidden_size,
             layers=self.decoder_layers,
             max_length=self.max_length,
+            positional_encoding=self.positional_encoding,
         )
 
     def greedy_decode(self, prefix: torch.Tensor) -> torch.Tensor:

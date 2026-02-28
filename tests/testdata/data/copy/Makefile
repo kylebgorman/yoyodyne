@@ -41,6 +41,8 @@ all: train.tsv \
 	soft_attention_lstm_transformer_source_expected.txt \
 	transformer_expected.test \
 	transformer_expected.txt \
+	transformer_absolute_positional_expected.test \
+	transformer_absolute_positional_expected.txt \
 	transformer_student_forcing_expected.test \
 	transformer_student_forcing_expected.txt
 

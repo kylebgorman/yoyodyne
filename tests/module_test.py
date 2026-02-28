@@ -48,15 +48,23 @@ class TestModule:
         module = modules.LinearEncoder()
         assert isinstance(module, modules.LinearEncoder)
 
-    def test_positional_encoding(self):
-        module = modules.PositionalEncoding()
-        assert isinstance(module, modules.PositionalEncoding)
+    @pytest.mark.parametrize(
+        "mod",
+        [
+            modules.AbsolutePositionalEncoding,
+            modules.NullPositionalEncoding,
+            modules.SinusoidalPositionalEncoding,
+        ],
+    )
+    def test_positional_encodings(self, mod):
+        module = mod()
+        assert isinstance(module, mod)
 
     @pytest.mark.parametrize(
         "mod",
         [modules.GRUDecoder, modules.LSTMDecoder],
     )
-    def test_rnn_decoder(self, mod):
+    def test_rnn_decoders(self, mod):
         module = mod()
         assert isinstance(module, mod)
 
@@ -64,7 +72,7 @@ class TestModule:
         "mod",
         [modules.GRUEncoder, modules.LSTMEncoder],
     )
-    def test_rnn_encoder(self, mod):
+    def test_rnn_encoders(self, mod):
         module = mod()
         assert isinstance(module, mod)
 
@@ -72,18 +80,19 @@ class TestModule:
         "mod",
         [modules.SoftAttentionGRUDecoder, modules.SoftAttentionLSTMDecoder],
     )
-    def test_soft_attention_rnn_decoder(self, mod):
+    def test_soft_attention_rnn_decoders(self, mod):
         module = mod()
         assert isinstance(module, mod)
 
     @pytest.mark.parametrize(
         "mod",
         [
+            modules.CausalTransformerDecoder,
             modules.PointerGeneratorTransformerDecoder,
             modules.TransformerDecoder,
         ],
     )
-    def test_transformer_decoder(self, mod):
+    def test_transformer_decoders(self, mod):
         module = mod()
         assert isinstance(module, mod)
 
@@ -94,6 +103,6 @@ class TestModule:
             modules.TransformerEncoder,
         ],
     )
-    def test_transformer_encoder(self, mod):
+    def test_transformer_encoders(self, mod):
         module = mod()
         assert isinstance(module, mod)

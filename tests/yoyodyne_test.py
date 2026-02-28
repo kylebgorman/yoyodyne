@@ -41,6 +41,7 @@ ARCH = [
     "soft_attention_lstm_gru_source",
     "soft_attention_lstm_transformer_source",
     "transformer",
+    "transformer_absolute_positional",
     "transformer_student_forcing",
 ]
 INFLECTION_ARCH = [
@@ -54,6 +55,7 @@ INFLECTION_ARCH = [
     "soft_attention_lstm_separate_features",
     "soft_attention_lstm_shared_features",
     "transformer_invariant_features",
+    "transformer_null_positional_features",
     "transformer_shared_features",
 ]
 SEED = 49

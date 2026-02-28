@@ -10,7 +10,10 @@ from .hard_attention import HardAttentionRNNDecoder  # noqa: F401
 from .hard_attention import HardAttentionGRUDecoder  # noqa: F401
 from .hard_attention import HardAttentionLSTMDecoder  # noqa: F401
 from .linear import LinearEncoder  # noqa: F401
-from .position import PositionalEncoding  # noqa: F401
+from .position import AbsolutePositionalEncoding  # noqa: F401
+from .position import BasePositionalEncoding  # noqa: F401
+from .position import NullPositionalEncoding  # noqa: F401
+from .position import SinusoidalPositionalEncoding  # noqa: F401
 from .rnn import GRUDecoder  # noqa: F401
 from .rnn import GRUEncoder  # noqa: F401
 from .rnn import LSTMDecoder  # noqa: F401

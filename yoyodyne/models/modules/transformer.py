@@ -56,6 +56,9 @@ class TransformerModule(base.BaseModule):
         layers (int, optional): number of layers.
         max_length (int, optional): maximum length for positional encoding.
             If not provided, one must call `set_max_length` before use.
+        positional_encoding (position.BasePositionalEncoding, optional):
+            a positional encoding object; if not specified, a sinusoidal
+            encoding of the appropriate size will be allocated.
         **kwargs: passed to superclass.
     """
 
@@ -64,7 +67,7 @@ class TransformerModule(base.BaseModule):
     hidden_size: int
     layers: int
     module: Union[nn.TransformerEncoder, nn.TransformerDecoder]
-    positional_encoding: position.PositionalEncoding
+    positional_encoding: Optional[position.BasePositionalEncoding]
 
     def __init__(
         self,
@@ -73,6 +76,7 @@ class TransformerModule(base.BaseModule):
         hidden_size: int = defaults.HIDDEN_SIZE,
         layers: int = defaults.LAYERS,
         max_length: Optional[int] = None,
+        positional_encoding: Optional[position.BasePositionalEncoding] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -81,6 +85,7 @@ class TransformerModule(base.BaseModule):
         self.hidden_size = hidden_size
         self.layers = layers
         self.module = self.get_module()
+        self.positional_encoding = positional_encoding
         if max_length is not None:
             self.set_max_length(max_length)
 
@@ -89,7 +94,7 @@ class TransformerModule(base.BaseModule):
     ) -> torch.Tensor:
         """Embeds the symbols and adds positional encoding."""
         embedded = self.esq * embeddings(symbols)
-        return self.dropout_layer(embedded + self.positional_encoding(symbols))
+        return self.dropout_layer(self.positional_encoding(embedded, symbols))
 
     @abc.abstractmethod
     def get_module(self) -> base.BaseModule: ...
@@ -98,12 +103,25 @@ class TransformerModule(base.BaseModule):
     def max_length(self) -> int:
         return self.positional_encoding.max_length
 
-    def set_max_length(self, max_length: int) -> None:
-        # Overrides the default (no-op).
-        self.positional_encoding = position.PositionalEncoding(
-            self.embedding_size,
-            max_length,
+    @property
+    def name(self) -> str:
+        return (
+            "transformer "
+            f"({self.positional_encoding.name} positional encoding)"
         )
+
+    def set_max_length(self, max_length: int) -> None:
+        if self.positional_encoding is None:
+            self.positional_encoding = position.SinusoidalPositionalEncoding(
+                self.embedding_size,
+                max_length,
+            )
+        elif self.positional_encoding.max_length < max_length:
+            raise Error(
+                f"{self.positional_encoding.name} max_length "
+                f"({self.positional_encoding.max_length}) < "
+                f"max_length ({max_length}"
+            )
 
 
 class TransformerEncoder(TransformerModule, base.BaseEncoder):
@@ -159,14 +177,8 @@ class TransformerEncoder(TransformerModule, base.BaseEncoder):
             norm=nn.LayerNorm(self.embedding_size),
             # This silences a warning about the use of nested tensors,
             # currently an experimental feature.
-            # TODO(#225): Re-enable if nested tensors are generalized to work
-            # with `norm_first`.
             enable_nested_tensor=False,
         )
-
-    @property
-    def name(self) -> str:
-        return "transformer"
 
     @property
     def output_size(self) -> int:
@@ -196,9 +208,6 @@ class FeatureInvariantTransformerEncoder(TransformerEncoder):
         Main Volume, pages 1901-1907.
     """
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def embed(
         self,
         symbols: torch.Tensor,
@@ -216,7 +225,7 @@ class FeatureInvariantTransformerEncoder(TransformerEncoder):
             )
         )
         return self.dropout_layer(
-            embedded + type_embedded + self.positional_encoding(symbols)
+            self.positional_encoding(embedded + type_embedded, symbols)
         )
 
     def forward(
@@ -246,7 +255,7 @@ class FeatureInvariantTransformerEncoder(TransformerEncoder):
 
     @property
     def name(self) -> str:
-        return "feature-invariant transformer"
+        return f"feature-invariant {super().name}"
 
 
 class WrappedTransformerDecoder(nn.TransformerDecoder):
@@ -349,10 +358,6 @@ class TransformerDecoder(TransformerModule):
             device=self.device,
             dtype=bool,
         )
-
-    @property
-    def name(self) -> str:
-        return "transformer"
 
     @property
     def output_size(self) -> int:
@@ -651,7 +656,7 @@ class PointerGeneratorTransformerDecoder(TransformerDecoder):
 
     @property
     def name(self) -> str:
-        return "pointer-generator transformer"
+        return f"pointer-generator {super().name}"
 
 
 class CausalTransformerDecoder(TransformerEncoder):
@@ -698,4 +703,4 @@ class CausalTransformerDecoder(TransformerEncoder):
 
     @property
     def name(self) -> str:
-        return "causal transformer"
+        return f"causal {super().name}"
